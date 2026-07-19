@@ -8,25 +8,29 @@ on:
 permissions:
   contents: read
 
-# Serialize every publication, not just runs for the same tag. The destination
-# preflight can therefore make a useful no-overwrite assertion immediately
-# before the only jobs that are allowed to publish.
+# Serialize every publication, not just runs for the same tag. A failed run
+# leaves one validated draft checkpoint that an exact-source retry can resume.
 concurrency:
   group: release-publish
   cancel-in-progress: false
 
 jobs:
   preflight:
-    name: Validate source version and empty destinations
+    name: Validate signed source and checkpoint draft release
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
       packages: read
     outputs:
-      image: ${{ steps.validate.outputs.image }}
-      stable: ${{ steps.validate.outputs.stable }}
-      version: ${{ steps.validate.outputs.version }}
+      commit: ${{ steps.source.outputs.commit }}
+      default_branch: ${{ steps.source.outputs.default_branch }}
+      image: ${{ steps.source.outputs.image }}
+      release_id: ${{ steps.source.outputs.release_id }}
+      release_published: ${{ steps.source.outputs.release_published }}
+      stable: ${{ steps.source.outputs.stable }}
+      tag_object: ${{ steps.source.outputs.tag_object }}
+      version: ${{ steps.source.outputs.version }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -36,8 +40,8 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show
 
-      - name: Validate tag, source, release, and image tag
-        id: validate
+      - name: Validate source and create or resume exact checkpoint
+        id: source
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,68 +49,134 @@ jobs:
           set -euo pipefail
 
           tag="$GITHUB_REF_NAME"
-          version="${tag#v}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          test "$(git cat-file -t "refs/tags/${tag}")" = tag
+          checkout_commit="$(git rev-parse HEAD)"
+          test "$(git rev-parse "${tag}^{commit}")" = "$checkout_commit"
+
           workspace_version="$(
             cargo metadata --locked --no-deps --format-version 1 |
               jq -r '.packages[] | select(.name == "x402-near-facilitator") | .version'
           )"
-          test "$tag" = "v${workspace_version}"
-          test "$version" = "$workspace_version"
-          tag_commit="$(git rev-parse "${tag}^{commit}")"
-          test "$tag_commit" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
-          test "$tag_commit" = "$(git rev-parse HEAD)"
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-
           stable=false
-          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ "${tag#v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             stable=true
           fi
 
-          repository_lower="${GITHUB_REPOSITORY,,}"
-          image="ghcr.io/${repository_lower}"
+          gh api "repos/${GITHUB_REPOSITORY}" >repository.json
+          default_branch="$(jq -er '.default_branch' repository.json)"
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >tag-ref.json
+          tag_object="$(jq -er '.object.sha' tag-ref.json)"
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" \
+            >tag-object.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/heads/${default_branch}" \
+            >default-branch-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/branches/${default_branch}" \
+            >default-branch.json
 
-          release_status="$(
-            curl --silent --show-error --retry 3 --retry-all-errors \
-              --output release-response.json \
-              --write-out '%{http_code}' \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
-          )"
-          case "$release_status" in
-            404) ;;
-            200)
-              echo "error: GitHub release ${tag} already exists" >&2
-              exit 1
-              ;;
-            *)
-              echo "error: GitHub release preflight returned HTTP ${release_status}" >&2
-              exit 1
-              ;;
-          esac
-          rm -f release-response.json
+          printf '%s\n' \
+            '<!-- x402-release-checkpoint:v1' \
+            "repository=${GITHUB_REPOSITORY}" \
+            "tag=${tag}" \
+            "tag-object=${tag_object}" \
+            "commit=${checkout_commit}" \
+            '-->' \
+            'This draft is a resumable release checkpoint. The verified' \
+            'artifact inventory is recorded in release-manifest.json.' \
+            >checkpoint-body.md
 
-          echo "$GH_TOKEN" |
-            docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          if docker buildx imagetools inspect "${image}:${version}" \
-            >image-inspect.out 2>image-inspect.err; then
-            echo "error: immutable GHCR tag ${image}:${version} already exists" >&2
-            exit 1
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            >release-pages.json
+          python3 -B scripts/release_guard.py select-release \
+            --releases-json release-pages.json \
+            --tag "$tag" \
+            --release-output release-response.json \
+            >release-selection.json
+
+          checkpoint_found=false
+          if jq -e '.found == true' release-selection.json >/dev/null; then
+            checkpoint_found=true
+            python3 -B scripts/release_guard.py validate-checkpoint \
+              --release-json release-response.json \
+              --tag "$tag" \
+              --commit "$checkout_commit" \
+              --body-file checkpoint-body.md \
+              --stable "$stable" \
+              --allow-published \
+              --github-output "$GITHUB_OUTPUT"
           fi
-          if ! grep -Eiq \
-            'not found|manifest unknown|no such manifest' image-inspect.err; then
-            cat image-inspect.err >&2
-            echo "error: GHCR preflight failed ambiguously; refusing publication" >&2
-            exit 1
-          fi
-          rm -f image-inspect.out image-inspect.err
 
-          {
-            echo "image=${image}"
-            echo "stable=${stable}"
-            echo "version=${version}"
-          } >>"$GITHUB_OUTPUT"
+          descendant_args=()
+          branch_head="$(jq -er '.object.sha' default-branch-ref.json)"
+          if [ "$branch_head" != "$checkout_commit" ]; then
+            if [ "$checkpoint_found" != true ]; then
+              echo "error: first checkpoint requires the current default branch head" >&2
+              exit 1
+            fi
+            git fetch --no-tags origin "$branch_head"
+            test "$(git rev-parse FETCH_HEAD)" = "$branch_head"
+            git merge-base --is-ancestor "$checkout_commit" "$branch_head"
+            descendant_args+=(--descendant-proven)
+          fi
+
+          python3 -B scripts/release_guard.py validate-source \
+            --repository-json repository.json \
+            --tag-ref-json tag-ref.json \
+            --tag-object-json tag-object.json \
+            --branch-ref-json default-branch-ref.json \
+            --branch-json default-branch.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$tag" \
+            --workspace-version "$workspace_version" \
+            --expected-commit "$checkout_commit" \
+            --github-sha "$GITHUB_SHA" \
+            "${descendant_args[@]}" \
+            --github-output "$GITHUB_OUTPUT"
+
+          prerelease=true
+          if [ "$stable" = true ]; then
+            prerelease=false
+          fi
+          if [ "$checkpoint_found" = false ]; then
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/heads/${default_branch}" \
+              >first-create-default-branch-ref.json
+            gh api "repos/${GITHUB_REPOSITORY}/branches/${default_branch}" \
+              >first-create-default-branch.json
+            jq -e \
+              --arg branch "$default_branch" \
+              '.name == $branch and .protected == true' \
+              first-create-default-branch.json >/dev/null
+            test "$(
+              jq -er '.object.sha' first-create-default-branch-ref.json
+            )" = "$checkout_commit"
+            jq -n \
+              --arg tag "$tag" \
+              --arg commit "$checkout_commit" \
+              --arg name "$tag" \
+              --rawfile body checkpoint-body.md \
+              --argjson prerelease "$prerelease" \
+              '{
+                tag_name: $tag,
+                target_commitish: $commit,
+                name: $name,
+                body: $body,
+                draft: true,
+                prerelease: $prerelease
+              }' >create-release.json
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/releases" \
+              --input create-release.json >release-response.json
+            python3 -B scripts/release_guard.py validate-checkpoint \
+              --release-json release-response.json \
+              --tag "$tag" \
+              --commit "$checkout_commit" \
+              --body-file checkpoint-body.md \
+              --stable "$stable" \
+              --github-output "$GITHUB_OUTPUT"
+          fi
 
   quality:
     name: Locked release quality gate
@@ -363,6 +433,15 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
+      - name: Normalize native SBOM for exact-source retries
+        env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+        run: |
+          python3 -B scripts/release_guard.py normalize-sbom \
+            --source "dist/${{ steps.stage.outputs.sbom }}" \
+            --output "dist/${{ steps.stage.outputs.sbom }}" \
+            --commit "$COMMIT"
+
       - name: Validate native artifact SBOM
         run: |
           set -euo pipefail
@@ -410,22 +489,34 @@ jobs:
           subject-path: dist/${{ steps.package.outputs.archive }}
           sbom-path: dist/${{ steps.stage.outputs.sbom }}
 
-      - name: Stage native attestation bundles
+      - name: Verify native checksums and attestations
+        env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNER_WORKFLOW: github.com/${{ github.repository }}/.github/workflows/release.yml
         run: |
           set -euo pipefail
           archive="dist/${{ steps.package.outputs.archive }}"
-          provenance="${archive}.provenance.sigstore.json"
-          sbom_attestation="${archive}.sbom.sigstore.json"
-          cp "${{ steps.native-provenance.outputs.bundle-path }}" "$provenance"
-          cp "${{ steps.native-sbom-attestation.outputs.bundle-path }}" \
-            "$sbom_attestation"
           (
             cd dist
-            sha256sum "$(basename "$provenance")" \
-              >"$(basename "$provenance").sha256"
-            sha256sum "$(basename "$sbom_attestation")" \
-              >"$(basename "$sbom_attestation").sha256"
+            sha256sum --check \
+              "${{ steps.package.outputs.archive }}.sha256"
+            sha256sum --check \
+              "${{ steps.stage.outputs.sbom }}.sha256"
           )
+          gh attestation verify "$archive" \
+            --bundle "${{ steps.native-provenance.outputs.bundle-path }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$COMMIT" \
+            --source-ref "$GITHUB_REF" \
+            --signer-workflow "$SIGNER_WORKFLOW"
+          gh attestation verify "$archive" \
+            --bundle "${{ steps.native-sbom-attestation.outputs.bundle-path }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://cyclonedx.org/bom \
+            --source-digest "$COMMIT" \
+            --source-ref "$GITHUB_REF" \
+            --signer-workflow "$SIGNER_WORKFLOW"
 
       - name: Remove unpacked staging directory
         run: rm -rf "dist/${{ steps.stage.outputs.directory }}"
@@ -436,6 +527,7 @@ jobs:
           name: release-files-native
           path: dist/
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
   image:
@@ -449,7 +541,7 @@ jobs:
       id-token: write
       attestations: write
     outputs:
-      digest: ${{ steps.push.outputs.digest }}
+      digest: ${{ steps.publish.outputs.digest }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -457,38 +549,40 @@ jobs:
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Recheck immutable image destination
+      - name: Build exact local image and expected digest
+        id: build
         env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
           IMAGE: ${{ needs.preflight.outputs.image }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          if docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
-            >image-inspect.out 2>image-inspect.err; then
-            echo "error: immutable GHCR tag ${IMAGE}:${VERSION} already exists" >&2
-            exit 1
-          fi
-          if ! grep -Eiq \
-            'not found|manifest unknown|no such manifest' image-inspect.err; then
-            cat image-inspect.err >&2
-            echo "error: GHCR pre-push check failed ambiguously" >&2
-            exit 1
-          fi
-          rm -f image-inspect.out image-inspect.err
-
-      - name: Build exact local image
-        env:
-          IMAGE: ${{ needs.preflight.outputs.image }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          set -euo pipefail
+          mkdir -p work dist
+          source_date_epoch="$(git show -s --format=%ct "$COMMIT")"
+          [[ "$source_date_epoch" =~ ^[0-9]+$ ]]
+          export SOURCE_DATE_EPOCH="$source_date_epoch"
           docker buildx build \
             --platform linux/amd64 \
+            --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
             --build-arg VERSION="$VERSION" \
-            --build-arg VCS_REF="$GITHUB_SHA" \
+            --build-arg VCS_REF="$COMMIT" \
             --tag "${IMAGE}:${VERSION}" \
+            --provenance=false \
+            --metadata-file work/image-build-metadata.json \
             --load \
             .
+          digest="$(
+            jq -er '."containerimage.digest"' work/image-build-metadata.json
+          )"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker image inspect \
+            --format '{{json .Config.Labels}}' \
+            "${IMAGE}:${VERSION}" >work/local-labels.json
+          python3 -B scripts/release_guard.py validate-labels \
+            --labels-json work/local-labels.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --version "$VERSION" \
+            --commit "$COMMIT"
           test "$(
             docker run --rm \
               --entrypoint /usr/local/bin/x402-near-facilitator \
@@ -501,7 +595,58 @@ jobs:
               "${IMAGE}:${VERSION}" \
               --version
           )" = "x402-near-admin ${VERSION}"
-          mkdir -p dist
+          echo "digest=${digest}" >>"$GITHUB_OUTPUT"
+
+      - name: Publish or resume exact immutable version image
+        id: publish
+        env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          EXPECTED_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          reference="${IMAGE}:${VERSION}"
+          if docker buildx imagetools inspect "$reference" \
+            --format '{{json .Manifest}}' \
+            >work/remote-manifest.json 2>work/remote-inspect.err; then
+            remote_digest="$(jq -er '.digest' work/remote-manifest.json)"
+            test "$remote_digest" = "$EXPECTED_DIGEST" || {
+              echo "error: existing immutable image digest does not match rebuild" >&2
+              exit 1
+            }
+          else
+            if ! grep -Eiq \
+              'not found|manifest unknown|no such manifest' \
+              work/remote-inspect.err; then
+              cat work/remote-inspect.err >&2
+              echo "error: GHCR inspection failed ambiguously" >&2
+              exit 1
+            fi
+            docker push "$reference"
+          fi
+
+          docker buildx imagetools inspect "$reference" \
+            --format '{{json .Manifest}}' >work/remote-manifest.json
+          remote_digest="$(jq -er '.digest' work/remote-manifest.json)"
+          test "$remote_digest" = "$EXPECTED_DIGEST"
+          docker pull --platform linux/amd64 "$reference"
+          docker image inspect \
+            --format '{{json .Config.Labels}}' \
+            "$reference" >work/remote-labels.json
+          python3 -B scripts/release_guard.py validate-labels \
+            --labels-json work/remote-labels.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --version "$VERSION" \
+            --commit "$COMMIT"
+
+          digest_file="x402-near-facilitator-${GITHUB_REF_NAME}-oci.digest"
+          printf '%s@%s\n' "$IMAGE" "$remote_digest" >"dist/${digest_file}"
+          (
+            cd dist
+            sha256sum "$digest_file" >"${digest_file}.sha256"
+          )
+          echo "digest=${remote_digest}" >>"$GITHUB_OUTPUT"
 
       - name: Generate OCI image SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
@@ -512,6 +657,16 @@ jobs:
           syft-version: v1.48.0
           upload-artifact: false
           upload-release-assets: false
+
+      - name: Normalize OCI SBOM for exact-source retries
+        env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+        run: |
+          sbom="dist/x402-near-facilitator-${GITHUB_REF_NAME}-oci.cdx.json"
+          python3 -B scripts/release_guard.py normalize-sbom \
+            --source "$sbom" \
+            --output "$sbom" \
+            --commit "$COMMIT"
 
       - name: Validate OCI image SBOM
         run: |
@@ -528,34 +683,12 @@ jobs:
             sha256sum "$(basename "$sbom")" >"$(basename "$sbom").sha256"
           )
 
-      - name: Push immutable version tag
-        id: push
-        env:
-          IMAGE: ${{ needs.preflight.outputs.image }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          set -euo pipefail
-          docker push "${IMAGE}:${VERSION}"
-          digest="$(
-            docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
-              --format '{{json .Manifest}}' |
-              jq -r '.digest'
-          )"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          digest_file="x402-near-facilitator-${GITHUB_REF_NAME}-oci.digest"
-          printf '%s@%s\n' "$IMAGE" "$digest" >"dist/${digest_file}"
-          (
-            cd dist
-            sha256sum "$digest_file" >"${digest_file}.sha256"
-          )
-          echo "digest=${digest}" >>"$GITHUB_OUTPUT"
-
       - name: Attest image provenance
         id: image-provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-name: ${{ needs.preflight.outputs.image }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
 
       - name: Attest image SBOM
@@ -563,36 +696,39 @@ jobs:
         uses: actions/attest-sbom@bd218ad0dbcb3e146bd073d1d9c6d78e08aa8a0b # v2.4.0
         with:
           subject-name: ${{ needs.preflight.outputs.image }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
           sbom-path: dist/x402-near-facilitator-${{ github.ref_name }}-oci.cdx.json
           push-to-registry: true
 
-      - name: Stage image attestation bundles
+      - name: Verify OCI checksums and attestations
+        env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          SIGNER_WORKFLOW: github.com/${{ github.repository }}/.github/workflows/release.yml
         run: |
           set -euo pipefail
-          prefix="dist/x402-near-facilitator-${GITHUB_REF_NAME}-oci"
-          provenance="${prefix}.provenance.sigstore.json"
-          sbom_attestation="${prefix}.sbom.sigstore.json"
-          cp "${{ steps.image-provenance.outputs.bundle-path }}" "$provenance"
-          cp "${{ steps.image-sbom-attestation.outputs.bundle-path }}" \
-            "$sbom_attestation"
           (
             cd dist
-            sha256sum "$(basename "$provenance")" \
-              >"$(basename "$provenance").sha256"
-            sha256sum "$(basename "$sbom_attestation")" \
-              >"$(basename "$sbom_attestation").sha256"
+            sha256sum --check \
+              "x402-near-facilitator-${GITHUB_REF_NAME}-oci.digest.sha256"
+            sha256sum --check \
+              "x402-near-facilitator-${GITHUB_REF_NAME}-oci.cdx.json.sha256"
           )
-
-      - name: Update latest only for an attested stable image
-        if: needs.preflight.outputs.stable == 'true'
-        env:
-          IMAGE: ${{ needs.preflight.outputs.image }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          set -euo pipefail
-          docker tag "${IMAGE}:${VERSION}" "${IMAGE}:latest"
-          docker push "${IMAGE}:latest"
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --bundle "${{ steps.image-provenance.outputs.bundle-path }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$COMMIT" \
+            --source-ref "$GITHUB_REF" \
+            --signer-workflow "$SIGNER_WORKFLOW"
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --bundle "${{ steps.image-sbom-attestation.outputs.bundle-path }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://cyclonedx.org/bom \
+            --source-digest "$COMMIT" \
+            --source-ref "$GITHUB_REF" \
+            --signer-workflow "$SIGNER_WORKFLOW"
 
       - name: Upload OCI release files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -600,15 +736,24 @@ jobs:
           name: release-files-image
           path: dist/
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
   github-release:
-    name: Publish GitHub release
+    name: Verify checkpoint and publish release
     needs: [preflight, binaries, image]
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     permissions:
+      attestations: read
       contents: write
+      packages: write
     steps:
+      - name: Check out tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
       - name: Download native release files
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -621,22 +766,628 @@ jobs:
           name: release-files-image
           path: dist
 
-      - name: Create release without overwriting
+      - name: Revalidate source and release checkpoint
         env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DEFAULT_BRANCH: ${{ needs.preflight.outputs.default_branch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.preflight.outputs.release_id }}
+          RELEASE_PUBLISHED: ${{ needs.preflight.outputs.release_published }}
           STABLE: ${{ needs.preflight.outputs.stable }}
+          TAG_OBJECT: ${{ needs.preflight.outputs.tag_object }}
+          VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          flags=(--latest=false)
-          if [ "$STABLE" = true ]; then
-            flags=(--latest)
-          else
-            flags+=(--prerelease)
+          mkdir -p work/source
+          test "$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}")" = tag
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$COMMIT"
+
+          printf '%s\n' \
+            '<!-- x402-release-checkpoint:v1' \
+            "repository=${GITHUB_REPOSITORY}" \
+            "tag=${GITHUB_REF_NAME}" \
+            "tag-object=${TAG_OBJECT}" \
+            "commit=${COMMIT}" \
+            '-->' \
+            'This draft is a resumable release checkpoint. The verified' \
+            'artifact inventory is recorded in release-manifest.json.' \
+            >work/checkpoint-body.md
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            >work/release.json
+          python3 -B scripts/release_guard.py validate-checkpoint \
+            --release-json work/release.json \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$COMMIT" \
+            --body-file work/checkpoint-body.md \
+            --stable "$STABLE" \
+            --allow-published >work/checkpoint-state.json
+          jq -e \
+            --argjson expected "$RELEASE_PUBLISHED" \
+            '.published == $expected' \
+            work/checkpoint-state.json >/dev/null
+
+          gh api "repos/${GITHUB_REPOSITORY}" \
+            >work/source/repository.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" \
+            >work/source/tag-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${TAG_OBJECT}" \
+            >work/source/tag-object.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/heads/${DEFAULT_BRANCH}" \
+            >work/source/default-branch-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/branches/${DEFAULT_BRANCH}" \
+            >work/source/default-branch.json
+          descendant_args=()
+          branch_head="$(
+            jq -er '.object.sha' work/source/default-branch-ref.json
+          )"
+          if [ "$branch_head" != "$COMMIT" ]; then
+            git fetch --no-tags origin "$branch_head"
+            test "$(git rev-parse FETCH_HEAD)" = "$branch_head"
+            git merge-base --is-ancestor "$COMMIT" "$branch_head"
+            descendant_args+=(--descendant-proven)
           fi
-          gh release create "$GITHUB_REF_NAME" \
+          python3 -B scripts/release_guard.py validate-source \
+            --repository-json work/source/repository.json \
+            --tag-ref-json work/source/tag-ref.json \
+            --tag-object-json work/source/tag-object.json \
+            --branch-ref-json work/source/default-branch-ref.json \
+            --branch-json work/source/default-branch.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --workspace-version "$VERSION" \
+            --expected-commit "$COMMIT" \
+            --github-sha "$GITHUB_SHA" \
+            "${descendant_args[@]}" >work/source-validation.json
+
+          jq -e \
+            --arg commit "$COMMIT" \
+            --arg branch "$DEFAULT_BRANCH" \
+            --arg tag_object "$TAG_OBJECT" \
+            '.commit == $commit and
+             .default_branch == $branch and
+             .tag_object == $tag_object' \
+            work/source-validation.json >/dev/null
+
+      - name: Build exact release manifest
+        env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DEFAULT_BRANCH: ${{ needs.preflight.outputs.default_branch }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          TAG_OBJECT: ${{ needs.preflight.outputs.tag_object }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          python3 -B scripts/release_guard.py build-manifest \
+            --dist dist \
+            --output dist/release-manifest.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --tag-object "$TAG_OBJECT" \
+            --commit "$COMMIT" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --version "$VERSION" \
+            --image "$IMAGE" \
+            --image-digest "$DIGEST"
+
+      - name: Verify native and OCI release artifacts
+        env:
+          ARCHIVE: ${{ needs.binaries.outputs.archive }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          NATIVE_SBOM: ${{ needs.binaries.outputs.sbom }}
+          SIGNER_WORKFLOW: github.com/${{ github.repository }}/.github/workflows/release.yml
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          oci_prefix="x402-near-facilitator-${GITHUB_REF_NAME}-oci"
+          (
+            cd dist
+            sha256sum --check "${ARCHIVE}.sha256"
+            sha256sum --check "${NATIVE_SBOM}.sha256"
+            sha256sum --check "${oci_prefix}.digest.sha256"
+            sha256sum --check "${oci_prefix}.cdx.json.sha256"
+          )
+          jq -e '
+            any(.components[]?;
+              .name == "x402-types" and .version == "2.0.2") and
+            any(.components[]?;
+              .name == "near-primitives" and .version == "0.37.1")
+          ' "dist/${NATIVE_SBOM}" >/dev/null
+          jq -e '
+            any(.components[]?;
+              .name == "x402-types" and .version == "2.0.2") and
+            any(.components[]?;
+              .name == "near-primitives" and .version == "0.37.1")
+          ' "dist/${oci_prefix}.cdx.json" >/dev/null
+          test "$(
+            cat "dist/${oci_prefix}.digest"
+          )" = "${IMAGE}@${DIGEST}"
+
+          mkdir -p work/archive
+          tar -xzf "dist/${ARCHIVE}" -C work/archive
+          archive_root="work/archive/${ARCHIVE%.tar.gz}"
+          test -d "$archive_root"
+          (
+            cd "$archive_root"
+            sha256sum --check deploy-assets.sha256
+            sha256sum --check docs-assets.sha256
+          )
+          cmp "dist/${NATIVE_SBOM}" "$archive_root/SBOM.cdx.json"
+
+          echo "$GH_TOKEN" |
+            docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            --format '{{json .Manifest}}' >work/version-manifest.json
+          test "$(jq -er '.digest' work/version-manifest.json)" = "$DIGEST"
+          docker pull --platform linux/amd64 "${IMAGE}:${VERSION}"
+          docker image inspect \
+            --format '{{json .Config.Labels}}' \
+            "${IMAGE}:${VERSION}" >work/version-labels.json
+          python3 -B scripts/release_guard.py validate-labels \
+            --labels-json work/version-labels.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --version "$VERSION" \
+            --commit "$COMMIT"
+
+          gh attestation verify "dist/${ARCHIVE}" \
             --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --fail-on-no-commits \
-            --generate-notes \
-            "${flags[@]}" \
-            dist/*
+            --source-digest "$COMMIT" \
+            --source-ref "$GITHUB_REF" \
+            --signer-workflow "$SIGNER_WORKFLOW"
+          gh attestation verify "dist/${ARCHIVE}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://cyclonedx.org/bom \
+            --source-digest "$COMMIT" \
+            --source-ref "$GITHUB_REF" \
+            --signer-workflow "$SIGNER_WORKFLOW"
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$COMMIT" \
+            --source-ref "$GITHUB_REF" \
+            --signer-workflow "$SIGNER_WORKFLOW"
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://cyclonedx.org/bom \
+            --source-digest "$COMMIT" \
+            --source-ref "$GITHUB_REF" \
+            --signer-workflow "$SIGNER_WORKFLOW"
+
+      - name: Resume exact draft assets without overwriting
+        env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DEFAULT_BRANCH: ${{ needs.preflight.outputs.default_branch }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          RELEASE_ID: ${{ needs.preflight.outputs.release_id }}
+          RELEASE_PUBLISHED: ${{ needs.preflight.outputs.release_published }}
+          STABLE: ${{ needs.preflight.outputs.stable }}
+          TAG_OBJECT: ${{ needs.preflight.outputs.tag_object }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            >work/release-before-assets.json
+          python3 -B scripts/release_guard.py validate-checkpoint \
+            --release-json work/release-before-assets.json \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$COMMIT" \
+            --body-file work/checkpoint-body.md \
+            --stable "$STABLE" \
+            --allow-published >work/release-before-assets-state.json
+          jq -e \
+            --argjson expected "$RELEASE_PUBLISHED" \
+            '.published == $expected' \
+            work/release-before-assets-state.json >/dev/null
+          python3 -B scripts/release_guard.py validate-assets \
+            --release-json work/release-before-assets.json \
+            --dist dist \
+            --manifest dist/release-manifest.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --tag-object "$TAG_OBJECT" \
+            --commit "$COMMIT" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --version "$VERSION" \
+            --image "$IMAGE" \
+            --image-digest "$DIGEST" \
+            --allow-missing \
+            --missing-output work/missing-assets.txt \
+            --asset-map-output work/existing-assets.json >/dev/null
+
+          mkdir -p work/existing-assets
+          jq -r 'to_entries[] | @base64' work/existing-assets.json |
+            while IFS= read -r encoded; do
+              item="$(printf '%s' "$encoded" | base64 --decode)"
+              name="$(printf '%s' "$item" | jq -er '.key')"
+              asset_id="$(printf '%s' "$item" | jq -er '.value')"
+              gh api \
+                -H 'Accept: application/octet-stream' \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+                >"work/existing-assets/${name}"
+              cmp "dist/${name}" "work/existing-assets/${name}"
+            done
+
+          if [ "$RELEASE_PUBLISHED" = true ] &&
+             [ -s work/missing-assets.txt ]; then
+            echo "error: published release is missing expected assets" >&2
+            exit 1
+          fi
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            gh release upload "$GITHUB_REF_NAME" \
+              "dist/${name}#${name}" \
+              --repo "$GITHUB_REPOSITORY"
+          done <work/missing-assets.txt
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            >work/release-with-assets.json
+          python3 -B scripts/release_guard.py validate-checkpoint \
+            --release-json work/release-with-assets.json \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$COMMIT" \
+            --body-file work/checkpoint-body.md \
+            --stable "$STABLE" \
+            --allow-published >work/release-with-assets-state.json
+          jq -e \
+            --argjson expected "$RELEASE_PUBLISHED" \
+            '.published == $expected' \
+            work/release-with-assets-state.json >/dev/null
+          python3 -B scripts/release_guard.py validate-assets \
+            --release-json work/release-with-assets.json \
+            --dist dist \
+            --manifest dist/release-manifest.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --tag-object "$TAG_OBJECT" \
+            --commit "$COMMIT" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --version "$VERSION" \
+            --image "$IMAGE" \
+            --image-digest "$DIGEST" \
+            --asset-map-output work/all-assets.json >/dev/null
+
+          mkdir -p work/downloaded-assets
+          jq -r 'to_entries[] | @base64' work/all-assets.json |
+            while IFS= read -r encoded; do
+              item="$(printf '%s' "$encoded" | base64 --decode)"
+              name="$(printf '%s' "$item" | jq -er '.key')"
+              asset_id="$(printf '%s' "$item" | jq -er '.value')"
+              gh api \
+                -H 'Accept: application/octet-stream' \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+                >"work/downloaded-assets/${name}"
+              cmp "dist/${name}" "work/downloaded-assets/${name}"
+            done
+
+      - name: Recheck source, image, and exact asset set before publication
+        env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DEFAULT_BRANCH: ${{ needs.preflight.outputs.default_branch }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          RELEASE_ID: ${{ needs.preflight.outputs.release_id }}
+          RELEASE_PUBLISHED: ${{ needs.preflight.outputs.release_published }}
+          STABLE: ${{ needs.preflight.outputs.stable }}
+          TAG_OBJECT: ${{ needs.preflight.outputs.tag_object }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            >work/final-release.json
+          python3 -B scripts/release_guard.py validate-checkpoint \
+            --release-json work/final-release.json \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$COMMIT" \
+            --body-file work/checkpoint-body.md \
+            --stable "$STABLE" \
+            --allow-published >work/final-release-state.json
+          jq -e \
+            --argjson expected "$RELEASE_PUBLISHED" \
+            '.published == $expected' \
+            work/final-release-state.json >/dev/null
+
+          gh api "repos/${GITHUB_REPOSITORY}" \
+            >work/final-repository.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" \
+            >work/final-tag-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${TAG_OBJECT}" \
+            >work/final-tag-object.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/heads/${DEFAULT_BRANCH}" \
+            >work/final-default-branch-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/branches/${DEFAULT_BRANCH}" \
+            >work/final-default-branch.json
+          descendant_args=()
+          branch_head="$(
+            jq -er '.object.sha' work/final-default-branch-ref.json
+          )"
+          if [ "$branch_head" != "$COMMIT" ]; then
+            git fetch --no-tags origin "$branch_head"
+            test "$(git rev-parse FETCH_HEAD)" = "$branch_head"
+            git merge-base --is-ancestor "$COMMIT" "$branch_head"
+            descendant_args+=(--descendant-proven)
+          fi
+          python3 -B scripts/release_guard.py validate-source \
+            --repository-json work/final-repository.json \
+            --tag-ref-json work/final-tag-ref.json \
+            --tag-object-json work/final-tag-object.json \
+            --branch-ref-json work/final-default-branch-ref.json \
+            --branch-json work/final-default-branch.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --workspace-version "$VERSION" \
+            --expected-commit "$COMMIT" \
+            --github-sha "$GITHUB_SHA" \
+            "${descendant_args[@]}" >/dev/null
+
+          python3 -B scripts/release_guard.py validate-assets \
+            --release-json work/final-release.json \
+            --dist dist \
+            --manifest dist/release-manifest.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --tag-object "$TAG_OBJECT" \
+            --commit "$COMMIT" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --version "$VERSION" \
+            --image "$IMAGE" \
+            --image-digest "$DIGEST" >/dev/null
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            --format '{{json .Manifest}}' >work/final-image-manifest.json
+          test "$(
+            jq -er '.digest' work/final-image-manifest.json
+          )" = "$DIGEST"
+
+      - name: Publish only the fully verified checkpoint
+        env:
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DEFAULT_BRANCH: ${{ needs.preflight.outputs.default_branch }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          RELEASE_ID: ${{ needs.preflight.outputs.release_id }}
+          RELEASE_PUBLISHED: ${{ needs.preflight.outputs.release_published }}
+          STABLE: ${{ needs.preflight.outputs.stable }}
+          TAG_OBJECT: ${{ needs.preflight.outputs.tag_object }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            >work/prepublish-release.json
+          python3 -B scripts/release_guard.py validate-checkpoint \
+            --release-json work/prepublish-release.json \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$COMMIT" \
+            --body-file work/checkpoint-body.md \
+            --stable "$STABLE" \
+            --allow-published >work/prepublish-release-state.json
+          jq -e \
+            --argjson expected "$RELEASE_PUBLISHED" \
+            '.published == $expected' \
+            work/prepublish-release-state.json >/dev/null
+
+          # Repeat the complete source policy immediately before publication.
+          gh api "repos/${GITHUB_REPOSITORY}" \
+            >work/prepublish-repository.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" \
+            >work/prepublish-tag-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${TAG_OBJECT}" \
+            >work/prepublish-tag-object.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/heads/${DEFAULT_BRANCH}" \
+            >work/prepublish-default-branch-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/branches/${DEFAULT_BRANCH}" \
+            >work/prepublish-default-branch.json
+          descendant_args=()
+          branch_head="$(
+            jq -er '.object.sha' work/prepublish-default-branch-ref.json
+          )"
+          if [ "$branch_head" != "$COMMIT" ]; then
+            git fetch --no-tags origin "$branch_head"
+            test "$(git rev-parse FETCH_HEAD)" = "$branch_head"
+            git merge-base --is-ancestor "$COMMIT" "$branch_head"
+            descendant_args+=(--descendant-proven)
+          fi
+          python3 -B scripts/release_guard.py validate-source \
+            --repository-json work/prepublish-repository.json \
+            --tag-ref-json work/prepublish-tag-ref.json \
+            --tag-object-json work/prepublish-tag-object.json \
+            --branch-ref-json work/prepublish-default-branch-ref.json \
+            --branch-json work/prepublish-default-branch.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --workspace-version "$VERSION" \
+            --expected-commit "$COMMIT" \
+            --github-sha "$GITHUB_SHA" \
+            "${descendant_args[@]}" >/dev/null
+
+          # Re-fetch every publication input in this shell block. Existing
+          # assets are downloaded and byte-compared before an immutable release
+          # can be created.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            >work/immediate-release.json
+          python3 -B scripts/release_guard.py validate-checkpoint \
+            --release-json work/immediate-release.json \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$COMMIT" \
+            --body-file work/checkpoint-body.md \
+            --stable "$STABLE" \
+            --allow-published >work/immediate-release-state.json
+          jq -e \
+            --argjson expected "$RELEASE_PUBLISHED" \
+            '.published == $expected' \
+            work/immediate-release-state.json >/dev/null
+          python3 -B scripts/release_guard.py validate-assets \
+            --release-json work/immediate-release.json \
+            --dist dist \
+            --manifest dist/release-manifest.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --tag-object "$TAG_OBJECT" \
+            --commit "$COMMIT" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --version "$VERSION" \
+            --image "$IMAGE" \
+            --image-digest "$DIGEST" \
+            --asset-map-output work/immediate-assets.json >/dev/null
+          mkdir -p work/immediate-assets
+          jq -r 'to_entries[] | @base64' work/immediate-assets.json |
+            while IFS= read -r encoded; do
+              item="$(printf '%s' "$encoded" | base64 --decode)"
+              name="$(printf '%s' "$item" | jq -er '.key')"
+              asset_id="$(printf '%s' "$item" | jq -er '.value')"
+              gh api \
+                -H 'Accept: application/octet-stream' \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+                >"work/immediate-assets/${name}"
+              cmp "dist/${name}" "work/immediate-assets/${name}"
+            done
+
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            --format '{{json .Manifest}}' >work/immediate-image-manifest.json
+          test "$(
+            jq -er '.digest' work/immediate-image-manifest.json
+          )" = "$DIGEST"
+          docker pull --platform linux/amd64 "${IMAGE}:${VERSION}"
+          docker image inspect \
+            --format '{{json .Config.Labels}}' \
+            "${IMAGE}:${VERSION}" >work/immediate-image-labels.json
+          python3 -B scripts/release_guard.py validate-labels \
+            --labels-json work/immediate-image-labels.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --version "$VERSION" \
+            --commit "$COMMIT"
+
+          stable_action=not-stable
+          if [ "$STABLE" = true ]; then
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              >work/immediate-release-pages.json
+            stable_args=()
+            if [ "$RELEASE_PUBLISHED" = true ]; then
+              stable_args+=(--release-was-published)
+            fi
+            stable_action="$(
+              python3 -B scripts/release_guard.py decide-stable \
+                --releases-json work/immediate-release-pages.json \
+                --tag "$GITHUB_REF_NAME" \
+                "${stable_args[@]}" |
+                jq -er '.action'
+            )"
+          fi
+
+          if [ "$RELEASE_PUBLISHED" != true ]; then
+            prerelease=true
+            make_latest=false
+            if [ "$STABLE" = true ]; then
+              prerelease=false
+              make_latest=true
+            fi
+            jq -n \
+              --argjson prerelease "$prerelease" \
+              --arg make_latest "$make_latest" \
+              '{
+                draft: false,
+                prerelease: $prerelease,
+                make_latest: $make_latest
+              }' >work/publish-release.json
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+              --input work/publish-release.json >work/published-release.json
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+              >work/published-release.json
+          fi
+
+          python3 -B scripts/release_guard.py validate-checkpoint \
+            --release-json work/published-release.json \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$COMMIT" \
+            --body-file work/checkpoint-body.md \
+            --stable "$STABLE" \
+            --allow-published >work/published-release-state.json
+          jq -e '.published == true' \
+            work/published-release-state.json >/dev/null
+          python3 -B scripts/release_guard.py validate-assets \
+            --release-json work/published-release.json \
+            --dist dist \
+            --manifest dist/release-manifest.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --tag-object "$TAG_OBJECT" \
+            --commit "$COMMIT" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --version "$VERSION" \
+            --image "$IMAGE" \
+            --image-digest "$DIGEST" >/dev/null
+
+          # The mutable image alias is last. A published retry repairs it only
+          # while this release is still GitHub's latest stable release.
+          if [ "$STABLE" = true ] && [ "$stable_action" = promote ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+              >work/github-latest-release.json
+            current_digest=
+            if docker buildx imagetools inspect "${IMAGE}:latest" \
+              --format '{{json .Manifest}}' \
+              >work/latest-manifest.json 2>work/latest-inspect.err; then
+              current_digest="$(jq -er '.digest' work/latest-manifest.json)"
+              [[ "$current_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            elif ! grep -Eiq \
+              'not found|manifest unknown|no such manifest' \
+              work/latest-inspect.err; then
+              cat work/latest-inspect.err >&2
+              echo "error: GHCR latest inspection failed ambiguously" >&2
+              exit 1
+            fi
+
+            latest_args=()
+            if [ "$RELEASE_PUBLISHED" = true ]; then
+              latest_args+=(--release-was-published)
+            fi
+            if [ -n "$current_digest" ]; then
+              latest_args+=(--current-digest "$current_digest")
+            fi
+            latest_action="$(
+              python3 -B scripts/release_guard.py decide-latest \
+                "${latest_args[@]}" \
+                --release-id "$RELEASE_ID" \
+                --tag "$GITHUB_REF_NAME" \
+                --github-latest-release-json work/github-latest-release.json \
+                --expected-digest "$DIGEST" |
+                jq -er '.action'
+            )"
+            case "$latest_action" in
+              accept) ;;
+              preserve)
+                echo "A newer GitHub release exists; preserving its GHCR latest alias."
+                ;;
+              publish)
+                docker pull --platform linux/amd64 "${IMAGE}@${DIGEST}"
+                image_id="$(
+                  docker image inspect \
+                    --format '{{.Id}}' \
+                    "${IMAGE}@${DIGEST}"
+                )"
+                docker tag "$image_id" "${IMAGE}:latest"
+                docker push "${IMAGE}:latest"
+                ;;
+              *)
+                echo "error: invalid latest alias action: ${latest_action}" >&2
+                exit 1
+                ;;
+            esac
+            if [ "$latest_action" != preserve ]; then
+              docker buildx imagetools inspect "${IMAGE}:latest" \
+                --format '{{json .Manifest}}' >work/latest-manifest.json
+              test "$(jq -er '.digest' work/latest-manifest.json)" = "$DIGEST"
+            fi
+          elif [ "$stable_action" = preserve ]; then
+            echo "A higher stable release exists; preserving both latest pointers."
+          fi

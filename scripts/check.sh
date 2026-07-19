@@ -33,6 +33,7 @@ fi
 
 python3 -m json.tool deploy/config/mainnet.json.example >/dev/null
 python3 -m json.tool deploy/config/testnet.json.example >/dev/null
+python3 -B scripts/test_release_guard.py
 python3 scripts/check-docs.py
 
 git diff --check

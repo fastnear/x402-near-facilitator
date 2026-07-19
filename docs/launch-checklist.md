@@ -120,8 +120,10 @@ or conversation alone is not launch evidence.
       preview also names the asset, payer, recipient, relayer or `none`, and
       maximum sponsored NEAR; no confirmation is reused after a command or
       field changes.
-- [ ] `x402-relayer.mike.testnet` exists with dedicated service and separate
-      recovery keys and 10 testnet NEAR.
+- [x] `x402-relayer.mike.testnet` exists with dedicated service and separate
+      recovery keys and exactly 10 testnet NEAR initial funding. — 2026-07-19,
+      Mike Purvis / FastNEAR,
+      [relayer provisioning evidence](evidence/2026-07-19-relayer-provisioning.md)
 - [ ] Testnet config, Circle contract, RPC identity, exact merchant policy,
       budget, relayer key, and balance pass readiness.
 - [ ] Public testnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass.
@@ -157,8 +159,10 @@ or conversation alone is not launch evidence.
       preview also names the asset, payer, recipient, relayer or `none`, and
       maximum sponsored NEAR; no confirmation is reused after a command or
       field changes.
-- [ ] `x402-relayer.mike.near` exists with dedicated service and separate
-      recovery keys and exactly the approved 5 NEAR initial funding.
+- [x] `x402-relayer.mike.near` exists with dedicated service and separate
+      recovery keys and exactly the approved 5 NEAR initial funding. —
+      2026-07-19, Mike Purvis / FastNEAR,
+      [relayer provisioning evidence](evidence/2026-07-19-relayer-provisioning.md)
 - [ ] Mainnet config, Circle contract, RPC identity, exact `count.mike.near`
       policy, 0.50 NEAR global cap, 0.10 NEAR client cap, relayer key, and
       balance pass readiness.
