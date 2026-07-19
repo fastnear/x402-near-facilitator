@@ -1,0 +1,57 @@
+name: Fuzz smoke tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Parser fuzz smoke tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup show
+          rustup toolchain install nightly-2026-07-01 --profile minimal
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-0.13.2-nightly-2026-07-01-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Install cargo-fuzz
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Compile fuzz targets
+        run: cargo +nightly-2026-07-01 fuzz build
+
+      - name: Exercise signed-delegate decoder
+        run: cargo +nightly-2026-07-01 fuzz run decode_signed_delegate -- -max_total_time=20
+
+      - name: Exercise NEP-141 transfer JSON parser
+        run: cargo +nightly-2026-07-01 fuzz run decode_ft_transfer_args -- -max_total_time=20
+
+      - name: Exercise HTTP parser
+        run: cargo +nightly-2026-07-01 fuzz run parse_http_request -- -max_total_time=20

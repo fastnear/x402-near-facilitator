@@ -1,0 +1,472 @@
+openapi: 3.1.0
+info:
+  title: FastNEAR x402 facilitator for NEAR
+  version: 0.1.0
+  description: |
+    API-key-gated x402 v2 exact-payment facilitator for Circle USDC on NEAR.
+    Each deployed server is pinned to one network. Expected payment rejection
+    is returned as an HTTP 200 protocol response; transport, authentication,
+    policy, quota, conflict, and infrastructure errors use HTTP errors.
+    X-API-Key is primary and Bearer is an alternative. If both are sent, they
+    must contain the identical key; conflicting values receive HTTP 401.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  contact:
+    name: FastNEAR
+    url: https://fastnear.com
+servers:
+  - url: https://test.x402.fastnear.com
+    description: Testnet; not available until the launch checklist is complete
+  - url: https://x402.fastnear.com
+    description: Mainnet; not available until the launch checklist is complete
+tags:
+  - name: Discovery
+    description: Public facilitator capabilities
+  - name: Facilitator
+    description: Authenticated payment verification and settlement
+  - name: Operations
+    description: Public, sanitized liveness and readiness
+paths:
+  /supported:
+    get:
+      tags: [Discovery]
+      operationId: supported
+      summary: Report the payment kind and extensions supported by this instance
+      security: []
+      responses:
+        "200":
+          description: Supported x402 capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportedResponse"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /verify:
+    post:
+      tags: [Facilitator]
+      operationId: verify
+      summary: Verify a payment authorization without broadcasting
+      security:
+        - ApiKey: []
+        - Bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FacilitatorRequest"
+      responses:
+        "200":
+          description: Canonical valid or invalid x402 verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/RateOrBudgetLimit"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /settle:
+    post:
+      tags: [Facilitator]
+      operationId: settle
+      summary: Reverify and settle a payment exactly once
+      description: |
+        A successful response is returned only after the inner configured
+        NEP-141 token receipt reaches final SuccessValue. The transaction field
+        is always present and is empty when no transaction was broadcast.
+      security:
+        - ApiKey: []
+        - Bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FacilitatorRequest"
+      responses:
+        "200":
+          description: Canonical definitive x402 settlement result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/RateOrBudgetLimit"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /healthz:
+    get:
+      tags: [Operations]
+      operationId: health
+      summary: Report process liveness
+      security: []
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /readyz:
+    get:
+      tags: [Operations]
+      operationId: readiness
+      summary: Report sanitized settlement readiness
+      security: []
+      responses:
+        "200":
+          description: Instance can safely accept settlement work
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: Instance is alive but cannot safely settle
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Suggested retry delay in seconds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Primary resource-server credential; may accompany an identical Bearer value
+    Bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: x402 API key
+      description: Alternative credential; may accompany an identical X-API-Key value
+  responses:
+    BadRequest:
+      description: Malformed request or invalid payment-identifier syntax
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Missing, invalid, revoked, or non-identical dual credentials
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: The same payment identifier is bound to another fingerprint
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    TooLarge:
+      description: JSON body exceeds 65,536 bytes
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnsupportedMediaType:
+      description: Content-Type is not application/json
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    RateOrBudgetLimit:
+      description: API-client request rate or sponsorship budget exhausted
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+          description: Suggested retry delay in seconds
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unavailable:
+      description: Database, leadership, reconciliation, RPC, or relayer is unavailable or indeterminate
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+          description: Suggested retry delay in seconds
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    NearNetwork:
+      type: string
+      enum:
+        - near:testnet
+        - near:mainnet
+    ResourceInfo:
+      type: object
+      required: [url]
+      additionalProperties: false
+      properties:
+        url:
+          type: string
+          format: uri
+        description:
+          type: string
+        mimeType:
+          type: string
+        serviceName:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        iconUrl:
+          type: string
+          format: uri
+    PaymentRequirements:
+      type: object
+      required:
+        - scheme
+        - network
+        - asset
+        - amount
+        - payTo
+        - maxTimeoutSeconds
+      additionalProperties: false
+      properties:
+        scheme:
+          type: string
+          const: exact
+        network:
+          $ref: "#/components/schemas/NearNetwork"
+        asset:
+          type: string
+          description: Configured Circle NEP-141 contract account ID
+        amount:
+          type: string
+          pattern: "^[0-9]+$"
+          description: Exact atomic USDC amount
+        payTo:
+          type: string
+          description: Exact NEAR recipient account ID
+        maxTimeoutSeconds:
+          type: integer
+          minimum: 1
+        extra:
+          type: object
+          additionalProperties: true
+    PaymentIdentifierExtension:
+      type: object
+      required: [info, schema]
+      additionalProperties: false
+      properties:
+        info:
+          type: object
+          required: [required]
+          additionalProperties: false
+          properties:
+            required:
+              type: boolean
+            id:
+              type: string
+              minLength: 16
+              maxLength: 128
+              pattern: "^[A-Za-z0-9_-]+$"
+        schema:
+          type: object
+          additionalProperties: true
+    PaymentPayload:
+      type: object
+      required: [x402Version, accepted, payload]
+      additionalProperties: false
+      properties:
+        x402Version:
+          type: integer
+          minimum: 0
+          maximum: 255
+        resource:
+          $ref: "#/components/schemas/ResourceInfo"
+        accepted:
+          $ref: "#/components/schemas/PaymentRequirements"
+        payload:
+          type: object
+          required: [signedDelegateAction]
+          additionalProperties: false
+          properties:
+            signedDelegateAction:
+              type: string
+              description: Standard-base64 Borsh classic NEP-366 SignedDelegateAction
+        extensions:
+          type: object
+          additionalProperties: true
+          properties:
+            payment-identifier:
+              $ref: "#/components/schemas/PaymentIdentifierExtension"
+    FacilitatorRequest:
+      type: object
+      required: [x402Version, paymentPayload, paymentRequirements]
+      additionalProperties: false
+      properties:
+        x402Version:
+          type: integer
+          minimum: 0
+          maximum: 255
+        paymentPayload:
+          $ref: "#/components/schemas/PaymentPayload"
+        paymentRequirements:
+          $ref: "#/components/schemas/PaymentRequirements"
+    VerifyResponse:
+      type: object
+      required: [isValid]
+      additionalProperties: false
+      properties:
+        isValid:
+          type: boolean
+        invalidReason:
+          type: string
+        invalidMessage:
+          type: string
+        payer:
+          type: string
+        extensions:
+          type: object
+          additionalProperties: true
+    SettleResponse:
+      type: object
+      required: [success, transaction, network]
+      additionalProperties: false
+      properties:
+        success:
+          type: boolean
+        errorReason:
+          type: string
+        errorMessage:
+          type: string
+        payer:
+          type: string
+        transaction:
+          type: string
+          description: NEAR transaction hash, or an empty string before broadcast
+        network:
+          $ref: "#/components/schemas/NearNetwork"
+        extensions:
+          type: object
+          additionalProperties: true
+    SupportedKind:
+      type: object
+      required: [x402Version, scheme, network]
+      additionalProperties: false
+      properties:
+        x402Version:
+          type: integer
+          const: 2
+        scheme:
+          type: string
+          const: exact
+        network:
+          $ref: "#/components/schemas/NearNetwork"
+        extra:
+          type: object
+          additionalProperties: true
+    SupportedResponse:
+      type: object
+      required: [kinds, extensions, signers]
+      additionalProperties: false
+      properties:
+        kinds:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/SupportedKind"
+        extensions:
+          type: array
+          contains:
+            const: payment-identifier
+          items:
+            type: string
+        signers:
+          type: object
+          description: Exact CAIP-2 network ID to facilitator signer account IDs
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    HealthResponse:
+      type: object
+      required: [status, service, version]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+          const: x402-near-facilitator
+        version:
+          type: string
+    ReadinessCheck:
+      type: string
+      enum: [ready, not_ready]
+    ReadinessResponse:
+      type: object
+      required: [ready, checks]
+      additionalProperties: false
+      properties:
+        ready:
+          type: boolean
+        checks:
+          type: object
+          required: [database, leadership, reconciliation, rpc, relayer]
+          additionalProperties: false
+          properties:
+            database:
+              $ref: "#/components/schemas/ReadinessCheck"
+            leadership:
+              $ref: "#/components/schemas/ReadinessCheck"
+            reconciliation:
+              $ref: "#/components/schemas/ReadinessCheck"
+            rpc:
+              $ref: "#/components/schemas/ReadinessCheck"
+            relayer:
+              $ref: "#/components/schemas/ReadinessCheck"
+    ErrorResponse:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            requestId:
+              type: string

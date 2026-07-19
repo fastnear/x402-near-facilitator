@@ -1,0 +1,16 @@
+FastNEAR x402 facilitator for NEAR
+Copyright 2026 FastNEAR contributors
+
+This product is licensed under the Apache License, Version 2.0.
+
+The architecture uses the public extension interfaces of x402-rs, an
+Apache-2.0 project:
+https://github.com/x402-rs/x402-rs
+
+The x402 protocol specifications and the official TypeScript NEAR mechanism
+are maintained by the x402 Foundation:
+https://github.com/x402-foundation/x402
+
+NEAR, Circle, and other names may be trademarks of their respective owners.
+Their mention identifies interoperability targets and does not imply
+affiliation or endorsement.

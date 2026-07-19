@@ -1,0 +1,16 @@
+.git
+.github
+target
+dist
+coverage
+**/node_modules
+.env
+.env.*
+*.pem
+*.key
+*.credential
+*.secret
+deploy
+docs
+examples
+scripts

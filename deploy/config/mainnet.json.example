@@ -1,0 +1,33 @@
+{
+  "environment": "mainnet",
+  "network": "near:mainnet",
+  "bind_address": "127.0.0.1:8402",
+  "primary_rpc_url": "https://rpc.mainnet.fastnear.com",
+  "backup_rpc_url": "https://rpc.mainnet.near.org",
+  "asset": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+  "asset_symbol": "USDC",
+  "minimum_amount": "1000",
+  "relayer_account_id": "x402-relayer.mike.near",
+  "max_inner_gas": 30000000000000,
+  "database_max_connections": 10,
+  "request_limits": {
+    "body_bytes": 65536,
+    "verify_per_minute": 60,
+    "settle_per_minute": 10,
+    "verify_timeout_seconds": 15,
+    "settle_timeout_seconds": 60,
+    "max_concurrent_verify": 64
+  },
+  "sponsorship": {
+    "global_daily_yocto_near": "500000000000000000000000",
+    "default_client_daily_yocto_near": "100000000000000000000000",
+    "reservation_yocto_near": "10000000000000000000000",
+    "balance_warning_yocto_near": "1000000000000000000000000",
+    "balance_hard_stop_yocto_near": "250000000000000000000000"
+  },
+  "payment_identifier": {
+    "required": false,
+    "min_length": 16,
+    "max_length": 128
+  }
+}

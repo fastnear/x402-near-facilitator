@@ -1,0 +1,12 @@
+{
+  "name": "x402-near-http-client-conformance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check check.mjs",
+    "conformance": "node check.mjs"
+  },
+  "dependencies": {
+    "@x402/core": "2.19.0"
+  }
+}

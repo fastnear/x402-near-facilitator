@@ -1,0 +1,16 @@
+{
+  "name": "x402-near-reference-resource-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check index.mjs && node --check journal.mjs && node --test journal.test.mjs && node check-imports.mjs",
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@x402/core": "2.19.0",
+    "@x402/express": "2.19.0",
+    "@x402/extensions": "2.19.0",
+    "@x402/near": "2.19.0",
+    "express": "5.1.0"
+  }
+}

@@ -1,0 +1,6 @@
+extends:
+  - recommended
+
+rules:
+  # Public discovery and probe endpoints do not have meaningful 4xx outcomes.
+  operation-4xx-response: off

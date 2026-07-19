@@ -1,0 +1,15 @@
+{
+  "name": "x402-chain-near-fixtures",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node generate.mjs",
+    "check": "node generate.mjs --check"
+  },
+  "dependencies": {
+    "@near-js/crypto": "2.5.1",
+    "@near-js/signers": "2.5.1",
+    "@near-js/transactions": "2.5.1",
+    "@x402/near": "2.19.0"
+  }
+}

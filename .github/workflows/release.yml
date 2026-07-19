@@ -1,0 +1,638 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+# Serialize every publication, not just runs for the same tag. The destination
+# preflight can therefore make a useful no-overwrite assertion immediately
+# before the only jobs that are allowed to publish.
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate source version and empty destinations
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.validate.outputs.image }}
+      stable: ${{ steps.validate.outputs.stable }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Validate tag, source, release, and image tag
+        id: validate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          workspace_version="$(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq -r '.packages[] | select(.name == "x402-near-facilitator") | .version'
+          )"
+          test "$tag" = "v${workspace_version}"
+          test "$version" = "$workspace_version"
+          tag_commit="$(git rev-parse "${tag}^{commit}")"
+          test "$tag_commit" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          test "$tag_commit" = "$(git rev-parse HEAD)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+
+          stable=false
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            stable=true
+          fi
+
+          repository_lower="${GITHUB_REPOSITORY,,}"
+          image="ghcr.io/${repository_lower}"
+
+          release_status="$(
+            curl --silent --show-error --retry 3 --retry-all-errors \
+              --output release-response.json \
+              --write-out '%{http_code}' \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
+          )"
+          case "$release_status" in
+            404) ;;
+            200)
+              echo "error: GitHub release ${tag} already exists" >&2
+              exit 1
+              ;;
+            *)
+              echo "error: GitHub release preflight returned HTTP ${release_status}" >&2
+              exit 1
+              ;;
+          esac
+          rm -f release-response.json
+
+          echo "$GH_TOKEN" |
+            docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if docker buildx imagetools inspect "${image}:${version}" \
+            >image-inspect.out 2>image-inspect.err; then
+            echo "error: immutable GHCR tag ${image}:${version} already exists" >&2
+            exit 1
+          fi
+          if ! grep -Eiq \
+            'not found|manifest unknown|no such manifest' image-inspect.err; then
+            cat image-inspect.err >&2
+            echo "error: GHCR preflight failed ambiguously; refusing publication" >&2
+            exit 1
+          fi
+          rm -f image-inspect.out image-inspect.err
+
+          {
+            echo "image=${image}"
+            echo "stable=${stable}"
+            echo "version=${version}"
+          } >>"$GITHUB_OUTPUT"
+
+  quality:
+    name: Locked release quality gate
+    needs: preflight
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
+        env:
+          POSTGRES_DB: facilitator
+          POSTGRES_USER: facilitator
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U facilitator -d facilitator"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://facilitator@127.0.0.1:5432/facilitator
+      X402_FACILITATOR_TEST_DATABASE_URL: postgres://facilitator@127.0.0.1:5432/facilitator
+      X402_RUN_NODE_CLIENT_CONFORMANCE: "1"
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Install pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: |
+            conformance/http-client/package-lock.json
+            crates/x402-chain-near/fixtures/package-lock.json
+            examples/resource-server/package-lock.json
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-release-tools-0.20.2-0.22.2-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Install verification tools
+        run: |
+          command -v cargo-deny >/dev/null || \
+            cargo install cargo-deny --version 0.20.2 --locked
+          command -v cargo-audit >/dev/null || \
+            cargo install cargo-audit --version 0.22.2 --locked
+          command -v cargo-sqlx >/dev/null || \
+            cargo install sqlx-cli --version 0.8.6 --no-default-features \
+              --features rustls,postgres --locked
+
+      - name: Apply migrations to ephemeral PostgreSQL
+        run: cargo sqlx migrate run --source migrations
+
+      - name: Install official HTTP client conformance dependency
+        run: npm --prefix conformance/http-client ci
+
+      - name: Run locked repository checks
+        run: ./scripts/check.sh
+
+      - name: Require and check TypeScript oracle fixtures
+        run: |
+          set -euo pipefail
+          fixture_dir=crates/x402-chain-near/fixtures
+          test -f "$fixture_dir/package-lock.json"
+          npm --prefix "$fixture_dir" ci
+          npm --prefix "$fixture_dir" run check
+          npm --prefix "$fixture_dir" audit --audit-level=high
+
+      - name: Audit official HTTP client dependency
+        run: npm --prefix conformance/http-client audit --audit-level=high
+
+      - name: Check runnable NEAR resource workload
+        run: |
+          npm --prefix examples/resource-server ci
+          npm --prefix examples/resource-server run check
+          npm --prefix examples/resource-server audit --audit-level=high
+
+      - name: Lint OpenAPI
+        run: npx --yes --package=@redocly/cli@1.34.5 redocly lint docs/openapi.yaml
+
+      - name: Validate deny-by-default Nginx configuration
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          mkdir -p "$work/conf.d" "$work/snippets" "$work/certs" "$work/private"
+          cp deploy/nginx/x402-near-facilitator.conf "$work/conf.d/default.conf"
+          cp deploy/nginx/x402-near-proxy.conf "$work/snippets/"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj /CN=x402.fastnear.com \
+            -keyout "$work/private/x402.fastnear.com-origin.key" \
+            -out "$work/certs/x402.fastnear.com-origin.pem" >/dev/null 2>&1
+          docker run --rm \
+            --entrypoint nginx \
+            -v "$work/conf.d:/etc/nginx/conf.d:ro" \
+            -v "$work/snippets:/etc/nginx/snippets:ro" \
+            -v "$work/certs:/etc/ssl/certs:ro" \
+            -v "$work/private:/etc/ssl/private:ro" \
+            nginx:1.28.0-alpine@sha256:30f1c0d78e0ad60901648be663a710bdadf19e4c10ac6782c235200619158284 \
+            -t
+
+  fuzz:
+    name: Tagged parser fuzz gate
+    needs: preflight
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned fuzz toolchain
+        run: |
+          rustup show
+          rustup toolchain install nightly-2026-07-01 --profile minimal
+
+      - name: Cache Cargo fuzz dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            fuzz/target
+          key: ${{ runner.os }}-release-fuzz-0.13.2-nightly-2026-07-01-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Install pinned cargo-fuzz
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Compile fuzz targets
+        run: cargo +nightly-2026-07-01 fuzz build
+
+      - name: Exercise signed-delegate decoder
+        run: cargo +nightly-2026-07-01 fuzz run decode_signed_delegate -- -max_total_time=20
+
+      - name: Exercise NEP-141 transfer JSON parser
+        run: cargo +nightly-2026-07-01 fuzz run decode_ft_transfer_args -- -max_total_time=20
+
+      - name: Exercise HTTP parser
+        run: cargo +nightly-2026-07-01 fuzz run parse_http_request -- -max_total_time=20
+
+  binaries:
+    name: Build auditable native release
+    needs: [preflight, quality, fuzz]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      archive: ${{ steps.package.outputs.archive }}
+      directory: ${{ steps.stage.outputs.directory }}
+      sbom: ${{ steps.stage.outputs.sbom }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-auditable-0.7.5-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Install auditable build tool
+        run: |
+          command -v cargo-auditable >/dev/null || \
+            cargo install cargo-auditable --version 0.7.5 --locked
+
+      - name: Build locked auditable binaries
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ARCH" = X64
+          test "$(
+            rustc -vV | sed -n 's/^host: //p'
+          )" = x86_64-unknown-linux-gnu
+          cargo auditable build --release --locked \
+            --package x402-near-facilitator --bins
+          test "$(
+            target/release/x402-near-facilitator --version
+          )" = "x402-near-facilitator ${{ needs.preflight.outputs.version }}"
+          test "$(
+            target/release/x402-near-admin --version
+          )" = "x402-near-facilitator ${{ needs.preflight.outputs.version }}"
+
+      - name: Stage exact release assets
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=x86_64-unknown-linux-gnu
+          name="x402-near-facilitator-${GITHUB_REF_NAME}-${target}"
+          stage="dist/${name}"
+          mkdir -p "$stage"
+          install -m 0755 target/release/x402-near-facilitator "$stage/"
+          install -m 0755 target/release/x402-near-admin "$stage/"
+          cp -R migrations deploy docs "$stage/"
+          cp LICENSE NOTICE README.md "$stage/"
+
+          diff -qr migrations "$stage/migrations"
+          diff -qr deploy "$stage/deploy"
+          diff -qr docs "$stage/docs"
+
+          (
+            cd "$stage"
+            find deploy -type f -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum >deploy-assets.sha256
+            find docs -type f -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum >docs-assets.sha256
+            sha256sum --check deploy-assets.sha256 >/dev/null
+            sha256sum --check docs-assets.sha256 >/dev/null
+          )
+
+          echo "directory=${name}" >>"$GITHUB_OUTPUT"
+          echo "sbom=${name}.cdx.json" >>"$GITHUB_OUTPUT"
+
+      - name: Generate native artifact SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist/${{ steps.stage.outputs.directory }}
+          format: cyclonedx-json
+          output-file: dist/${{ steps.stage.outputs.sbom }}
+          syft-version: v1.48.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate native artifact SBOM
+        run: |
+          set -euo pipefail
+          sbom="dist/${{ steps.stage.outputs.sbom }}"
+          jq -e '
+            any(.components[]?;
+              .name == "x402-types" and .version == "2.0.2") and
+            any(.components[]?;
+              .name == "near-primitives" and .version == "0.37.1")
+          ' "$sbom" >/dev/null
+          cp "$sbom" \
+            "dist/${{ steps.stage.outputs.directory }}/SBOM.cdx.json"
+
+      - name: Package deterministic archive and checksums
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="${{ steps.stage.outputs.directory }}"
+          archive="${name}.tar.gz"
+          source_date_epoch="$(git log -1 --pretty=%ct)"
+          tar --sort=name \
+            --mtime="@${source_date_epoch}" \
+            --owner=0 --group=0 --numeric-owner \
+            -cf - -C dist "$name" |
+            gzip -n >"dist/${archive}"
+          (
+            cd dist
+            sha256sum "$archive" >"${archive}.sha256"
+            sha256sum "${{ steps.stage.outputs.sbom }}" \
+              >"${{ steps.stage.outputs.sbom }}.sha256"
+          )
+          echo "archive=${archive}" >>"$GITHUB_OUTPUT"
+
+      - name: Attest native archive provenance
+        id: native-provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: dist/${{ steps.package.outputs.archive }}
+
+      - name: Attest native archive SBOM
+        id: native-sbom-attestation
+        uses: actions/attest-sbom@bd218ad0dbcb3e146bd073d1d9c6d78e08aa8a0b # v2.4.0
+        with:
+          subject-path: dist/${{ steps.package.outputs.archive }}
+          sbom-path: dist/${{ steps.stage.outputs.sbom }}
+
+      - name: Stage native attestation bundles
+        run: |
+          set -euo pipefail
+          archive="dist/${{ steps.package.outputs.archive }}"
+          provenance="${archive}.provenance.sigstore.json"
+          sbom_attestation="${archive}.sbom.sigstore.json"
+          cp "${{ steps.native-provenance.outputs.bundle-path }}" "$provenance"
+          cp "${{ steps.native-sbom-attestation.outputs.bundle-path }}" \
+            "$sbom_attestation"
+          (
+            cd dist
+            sha256sum "$(basename "$provenance")" \
+              >"$(basename "$provenance").sha256"
+            sha256sum "$(basename "$sbom_attestation")" \
+              >"$(basename "$sbom_attestation").sha256"
+          )
+
+      - name: Remove unpacked staging directory
+        run: rm -rf "dist/${{ steps.stage.outputs.directory }}"
+
+      - name: Upload native release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-files-native
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  image:
+    name: Publish auditable GHCR image
+    needs: [preflight, binaries, fuzz]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Recheck immutable image destination
+        env:
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            >image-inspect.out 2>image-inspect.err; then
+            echo "error: immutable GHCR tag ${IMAGE}:${VERSION} already exists" >&2
+            exit 1
+          fi
+          if ! grep -Eiq \
+            'not found|manifest unknown|no such manifest' image-inspect.err; then
+            cat image-inspect.err >&2
+            echo "error: GHCR pre-push check failed ambiguously" >&2
+            exit 1
+          fi
+          rm -f image-inspect.out image-inspect.err
+
+      - name: Build exact local image
+        env:
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --build-arg VERSION="$VERSION" \
+            --build-arg VCS_REF="$GITHUB_SHA" \
+            --tag "${IMAGE}:${VERSION}" \
+            --load \
+            .
+          test "$(
+            docker run --rm \
+              --entrypoint /usr/local/bin/x402-near-facilitator \
+              "${IMAGE}:${VERSION}" \
+              --version
+          )" = "x402-near-facilitator ${VERSION}"
+          test "$(
+            docker run --rm \
+              --entrypoint /usr/local/bin/x402-near-admin \
+              "${IMAGE}:${VERSION}" \
+              --version
+          )" = "x402-near-facilitator ${VERSION}"
+          mkdir -p dist
+
+      - name: Generate OCI image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ needs.preflight.outputs.image }}:${{ needs.preflight.outputs.version }}
+          format: cyclonedx-json
+          output-file: dist/x402-near-facilitator-${{ github.ref_name }}-oci.cdx.json
+          syft-version: v1.48.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate OCI image SBOM
+        run: |
+          set -euo pipefail
+          sbom="dist/x402-near-facilitator-${GITHUB_REF_NAME}-oci.cdx.json"
+          jq -e '
+            any(.components[]?;
+              .name == "x402-types" and .version == "2.0.2") and
+            any(.components[]?;
+              .name == "near-primitives" and .version == "0.37.1")
+          ' "$sbom" >/dev/null
+          (
+            cd dist
+            sha256sum "$(basename "$sbom")" >"$(basename "$sbom").sha256"
+          )
+
+      - name: Push immutable version tag
+        id: push
+        env:
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE}:${VERSION}"
+          digest="$(
+            docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+              --format '{{json .Manifest}}' |
+              jq -r '.digest'
+          )"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          digest_file="x402-near-facilitator-${GITHUB_REF_NAME}-oci.digest"
+          printf '%s@%s\n' "$IMAGE" "$digest" >"dist/${digest_file}"
+          (
+            cd dist
+            sha256sum "$digest_file" >"${digest_file}.sha256"
+          )
+          echo "digest=${digest}" >>"$GITHUB_OUTPUT"
+
+      - name: Attest image provenance
+        id: image-provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ${{ needs.preflight.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest image SBOM
+        id: image-sbom-attestation
+        uses: actions/attest-sbom@bd218ad0dbcb3e146bd073d1d9c6d78e08aa8a0b # v2.4.0
+        with:
+          subject-name: ${{ needs.preflight.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: dist/x402-near-facilitator-${{ github.ref_name }}-oci.cdx.json
+          push-to-registry: true
+
+      - name: Stage image attestation bundles
+        run: |
+          set -euo pipefail
+          prefix="dist/x402-near-facilitator-${GITHUB_REF_NAME}-oci"
+          provenance="${prefix}.provenance.sigstore.json"
+          sbom_attestation="${prefix}.sbom.sigstore.json"
+          cp "${{ steps.image-provenance.outputs.bundle-path }}" "$provenance"
+          cp "${{ steps.image-sbom-attestation.outputs.bundle-path }}" \
+            "$sbom_attestation"
+          (
+            cd dist
+            sha256sum "$(basename "$provenance")" \
+              >"$(basename "$provenance").sha256"
+            sha256sum "$(basename "$sbom_attestation")" \
+              >"$(basename "$sbom_attestation").sha256"
+          )
+
+      - name: Update latest only for an attested stable image
+        if: needs.preflight.outputs.stable == 'true'
+        env:
+          IMAGE: ${{ needs.preflight.outputs.image }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker tag "${IMAGE}:${VERSION}" "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"
+
+      - name: Upload OCI release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-files-image
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  github-release:
+    name: Publish GitHub release
+    needs: [preflight, binaries, image]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download native release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-files-native
+          path: dist
+
+      - name: Download OCI release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-files-image
+          path: dist
+
+      - name: Create release without overwriting
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STABLE: ${{ needs.preflight.outputs.stable }}
+        run: |
+          set -euo pipefail
+          flags=(--latest=false)
+          if [ "$STABLE" = true ]; then
+            flags=(--latest)
+          else
+            flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --fail-on-no-commits \
+            --generate-notes \
+            "${flags[@]}" \
+            dist/*

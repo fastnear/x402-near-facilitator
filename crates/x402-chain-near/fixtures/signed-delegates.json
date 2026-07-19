@@ -1,0 +1,24 @@
+{
+  "warning": "DETERMINISTIC TEST KEYS — DO NOT FUND",
+  "generatedWith": "@x402/near@2.19.0",
+  "senderId": "alice.testnet",
+  "receiverId": "usdc.testnet",
+  "payTo": "merchant.testnet",
+  "amount": "1000000",
+  "nonce": "5",
+  "maxBlockHeight": "1060",
+  "gas": "30000000000000",
+  "deposit": "1",
+  "delegates": [
+    {
+      "curve": "ed25519",
+      "publicKey": "ed25519:F4uraozXXn4mPrkT3VQynMNn62iihTr53iPt9hUCjc4H",
+      "signedDelegateAction": "DQAAAGFsaWNlLnRlc3RuZXQMAAAAdXNkYy50ZXN0bmV0AQAAAAILAAAAZnRfdHJhbnNmZXI1AAAAeyJyZWNlaXZlcl9pZCI6Im1lcmNoYW50LnRlc3RuZXQiLCJhbW91bnQiOiIxMDAwMDAwIn0A4FfrSBsAAAEAAAAAAAAAAAAAAAAAAAAFAAAAAAAAACQEAAAAAAAAANEEH2KL2QozFYRZh4chgEDrpJ2iH3jqeICVFtaJ8b/KAJ5THcRCYejbLdSys20zBYrsa2VEYD3f25D2fIeUszTKNNgLbcm0CI8CdTi/2aFHK6RjNlLjyau5gyYXQQHa0w4="
+    },
+    {
+      "curve": "secp256k1",
+      "publicKey": "secp256k1:5yfR3mfkDgfHCh6aTewQk7szftDtiejN4EsiaZvjKewZSu5mErt6ByyMqMbcSwjQrW2G6rRcEopcPQoRS3C7kv86",
+      "signedDelegateAction": "DQAAAGFsaWNlLnRlc3RuZXQMAAAAdXNkYy50ZXN0bmV0AQAAAAILAAAAZnRfdHJhbnNmZXI1AAAAeyJyZWNlaXZlcl9pZCI6Im1lcmNoYW50LnRlc3RuZXQiLCJhbW91bnQiOiIxMDAwMDAwIn0A4FfrSBsAAAEAAAAAAAAAAAAAAAAAAAAFAAAAAAAAACQEAAAAAAAAAfjuchXZ+9cXy+8MCUMI1974sVVGExDi56sTbrunQzNAtZQqbPYlracwB4JpqdTN9eueLgQE9JxzejDuHzd/zgcBLCdia30d6m0ZR9rdwOTuQxTjKJw/oTeOd9EDTBAzknUWuEFGE4c41YXn88V45/y1zAQE3+btlRcBL6ABG3ffcgE="
+    }
+  ]
+}

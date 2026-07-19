@@ -1,0 +1,38 @@
+[package]
+name = "x402-near-facilitator-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+base64 = "0.22"
+libfuzzer-sys = "0.4.13"
+x402-chain-near = { version = "=0.1.0", path = "../crates/x402-chain-near" }
+x402-near-facilitator = { version = "=0.1.0", path = "../crates/x402-near-facilitator" }
+
+[[bin]]
+name = "decode_signed_delegate"
+path = "fuzz_targets/decode_signed_delegate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_ft_transfer_args"
+path = "fuzz_targets/decode_ft_transfer_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_http_request"
+path = "fuzz_targets/parse_http_request.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

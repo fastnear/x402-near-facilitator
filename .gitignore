@@ -1,0 +1,11 @@
+/target/
+/.env
+/.env.*
+!/.env.example
+*.pem
+*.key
+*.credential
+*.secret
+coverage/
+dist/
+.DS_Store
