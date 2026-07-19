@@ -180,6 +180,9 @@ jobs:
       - name: Run locked repository checks
         run: ./scripts/check.sh
 
+      - name: Exercise packaged installer on the production OS baseline
+        run: sudo ./scripts/test-install-release.sh
+
       - name: Require and check TypeScript oracle fixtures
         run: |
           set -euo pipefail

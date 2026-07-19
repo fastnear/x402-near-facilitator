@@ -81,6 +81,9 @@ jobs:
       - name: Run repository checks
         run: ./scripts/check.sh
 
+      - name: Exercise packaged installer on the production OS baseline
+        run: sudo ./scripts/test-install-release.sh
+
       - name: Audit official HTTP client dependency
         run: npm --prefix conformance/http-client audit --audit-level=high
 
