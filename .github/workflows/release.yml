@@ -314,7 +314,7 @@ jobs:
           )" = "x402-near-facilitator ${{ needs.preflight.outputs.version }}"
           test "$(
             target/release/x402-near-admin --version
-          )" = "x402-near-facilitator ${{ needs.preflight.outputs.version }}"
+          )" = "x402-near-admin ${{ needs.preflight.outputs.version }}"
 
       - name: Stage exact release assets
         id: stage
@@ -496,7 +496,7 @@ jobs:
               --entrypoint /usr/local/bin/x402-near-admin \
               "${IMAGE}:${VERSION}" \
               --version
-          )" = "x402-near-facilitator ${VERSION}"
+          )" = "x402-near-admin ${VERSION}"
           mkdir -p dist
 
       - name: Generate OCI image SBOM
