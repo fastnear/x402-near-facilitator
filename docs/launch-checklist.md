@@ -17,6 +17,8 @@ or conversation alone is not launch evidence.
 - [ ] New least-privileged Cloudflare DNS token provisioned.
 - [ ] Origin certificate covers only both launch hostnames and Cloudflare uses
       Full (strict).
+- [ ] Packaged Cloudflare origin allowlist matches both definitive IP lists;
+      proxied access succeeds and non-Cloudflare direct-origin access is denied.
 - [ ] External 60-second `/readyz` checks configured for both hostnames.
 - [ ] Changed `fn-test-pro` SSH key investigated out-of-band; no key was
       accepted automatically. This host is not a launch dependency.
@@ -102,7 +104,8 @@ or conversation alone is not launch evidence.
 - [ ] Origin access, OS firewall, clock sync, disk space, and host patching
       checked; detailed terminal records have at least 90-day retention,
       durable settlement identities are never recycled, and sanitized
-      journald retention is verified at no more than 14 days.
+      journald plus dedicated Nginx retention is verified at no more than
+      14 days.
 - [ ] Binary rollback drill succeeds without a schema rollback.
 
 ## Testnet launch

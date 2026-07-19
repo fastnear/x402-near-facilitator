@@ -175,10 +175,12 @@ Nginx terminates origin TLS and routes:
 - `test.x402.fastnear.com` to `127.0.0.1:8403`.
 
 Cloudflare proxies both public DNS records. The origin certificate covers only
-these names, and Cloudflare must use Full (strict) mode. Each systemd unit reads
-non-secret JSON from `/etc/x402-near-facilitator/<environment>.json` and
-receives the database URL, relayer credential, API-key pepper, and OTLP headers
-through `LoadCredential`.
+these names, Cloudflare must use Full (strict) mode, and the facilitator
+virtual hosts admit only Cloudflare's published proxy ranges plus loopback.
+Each systemd unit reads non-secret JSON from
+`/etc/x402-near-facilitator/<environment>.json` and receives the database URL,
+relayer credential, API-key pepper, and OTLP headers through
+`LoadCredential`.
 
 Releases are immutable version directories. The `current-mainnet` and
 `current-testnet` symlinks are the only deployment pointers, so each

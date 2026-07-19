@@ -153,6 +153,14 @@ Use a new least-privileged Cloudflare token that can edit DNS only in the
 records for both names to the main host only after the local origin checks
 pass. Never commit the token or origin private key.
 
+Immediately before cutover, compare
+`deploy/nginx/x402-near-cloudflare-only.conf` with Cloudflare's definitive
+`https://www.cloudflare.com/ips-v4` and `https://www.cloudflare.com/ips-v6`
+lists. Update and re-review the packaged file if either list differs. The
+facilitator virtual hosts allow only those proxy ranges plus loopback, so a
+stale list fails closed. Verify a proxied request succeeds and a direct-origin
+request from a non-Cloudflare address is denied.
+
 ## Install a release
 
 The attested release archive contains both binaries, migrations, license
@@ -218,13 +226,18 @@ admin binary cannot execute. The packaged promotion tool separately executes
 the service binary with `--version` before it changes an environment pointer;
 that on-host ABI smoke check is a mandatory promotion gate.
 
-Create system users once:
+Create system users once. The same-named primary groups are required by the
+packaged `Group=x402-near-%i` directive:
 
 ```sh
-sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin \
+sudo useradd --system --user-group \
+  --home-dir /nonexistent --shell /usr/sbin/nologin \
   x402-near-mainnet
-sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin \
+sudo useradd --system --user-group \
+  --home-dir /nonexistent --shell /usr/sbin/nologin \
   x402-near-testnet
+test "$(id -gn x402-near-mainnet)" = x402-near-mainnet
+test "$(id -gn x402-near-testnet)" = x402-near-testnet
 sudo install -d -m 0755 /etc/x402-near-facilitator
 sudo install -d -m 0700 \
   /etc/x402-near-facilitator/credentials/mainnet \
@@ -248,17 +261,29 @@ sudo systemctl daemon-reload
 sudo install -d -m 0755 /etc/nginx/snippets
 sudo install -m 0644 "$release/deploy/nginx/x402-near-proxy.conf" \
   /etc/nginx/snippets/x402-near-proxy.conf
+sudo install -m 0644 "$release/deploy/nginx/x402-near-cloudflare-only.conf" \
+  /etc/nginx/snippets/x402-near-cloudflare-only.conf
 sudo install -m 0644 "$release/deploy/nginx/x402-near-facilitator.conf" \
   /etc/nginx/sites-available/x402-near-facilitator
+sudo install -m 0644 \
+  "$release/deploy/logrotate/x402-near-facilitator" \
+  /etc/logrotate.d/x402-near-facilitator
 sudo ln -s /etc/nginx/sites-available/x402-near-facilitator \
   /etc/nginx/sites-enabled/x402-near-facilitator
 sudo systemd-analyze verify \
   /etc/systemd/system/x402-near-facilitator@.service
+sudo logrotate --debug /etc/logrotate.d/x402-near-facilitator
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
 If the site symlink already exists, inspect it rather than replacing it.
+Before enabling the site on a shared host, inspect `sudo nginx -T` and stop if
+another explicit IPv4 or IPv6 `default_server` would conflict with the
+deny-by-default server blocks. The dedicated Nginx logs retain the current day
+plus 13 daily rotations, bounded by `maxage 14`; verify the host's daily
+logrotate timer before cutover.
+
 Verify core dumps are disabled and that the settings resolve as expected after
 each instance has been loaded:
 

@@ -270,16 +270,21 @@ impl PgStore {
         asset: &str,
     ) -> Result<bool, StoreError> {
         sqlx::query_scalar(
-            "SELECT NOT EXISTS ( \
-                SELECT 1 FROM api_clients c \
-                WHERE c.status = 'active' \
-                  AND NOT EXISTS ( \
-                    SELECT 1 FROM api_client_payees p \
-                    WHERE p.client_id = c.id \
-                      AND p.network = $1 \
-                      AND p.asset = $2 \
-                  ) \
-             )",
+            "SELECT \
+                EXISTS ( \
+                    SELECT 1 FROM api_clients c \
+                    WHERE c.status = 'active' \
+                ) \
+                AND NOT EXISTS ( \
+                    SELECT 1 FROM api_clients c \
+                    WHERE c.status = 'active' \
+                      AND NOT EXISTS ( \
+                        SELECT 1 FROM api_client_payees p \
+                        WHERE p.client_id = c.id \
+                          AND p.network = $1 \
+                          AND p.asset = $2 \
+                      ) \
+                )",
         )
         .bind(network)
         .bind(asset)

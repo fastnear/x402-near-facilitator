@@ -1,0 +1,14 @@
+/var/log/nginx/x402-near-facilitator.access.log
+/var/log/nginx/x402-near-facilitator.error.log {
+    daily
+    rotate 13
+    maxage 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        invoke-rc.d nginx rotate >/dev/null 2>&1
+    endscript
+}

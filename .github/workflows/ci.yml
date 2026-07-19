@@ -101,6 +101,7 @@ jobs:
           mkdir -p "$work/conf.d" "$work/snippets" "$work/certs" "$work/private"
           cp deploy/nginx/x402-near-facilitator.conf "$work/conf.d/default.conf"
           cp deploy/nginx/x402-near-proxy.conf "$work/snippets/"
+          cp deploy/nginx/x402-near-cloudflare-only.conf "$work/snippets/"
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
             -subj /CN=x402.fastnear.com \
             -keyout "$work/private/x402.fastnear.com-origin.key" \

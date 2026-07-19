@@ -137,7 +137,7 @@ async fn schema_and_active_client_policy_gate_database_readiness() -> TestResult
     };
     assert!(database.store.schema_compatible().await?);
     assert!(
-        database
+        !database
             .store
             .operationally_ready("near:testnet", "usdc.fakes.testnet")
             .await?

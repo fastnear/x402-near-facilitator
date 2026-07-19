@@ -84,6 +84,7 @@ The effective configuration check must confirm:
 - primary and backup RPCs report the configured network and final blocks;
 - configured asset, relayer, and minimum amount match the environment;
 - the relayer key belongs to the configured account and is FullAccess;
+- at least one API client is active;
 - recipient policies exist for every enabled API client;
 - the relayer is not quarantined and its balance is above the hard stop;
 - nonterminal settlement reconciliation has completed.
