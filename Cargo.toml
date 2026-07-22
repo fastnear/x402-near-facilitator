@@ -41,7 +41,7 @@ subtle = "2.6"
 thiserror = "2.0"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5", features = ["limit", "timeout", "util"] }
-tower-http = { version = "0.6", features = ["catch-panic", "limit", "request-id", "sensitive-headers", "timeout", "trace"] }
+tower-http = { version = "0.7", features = ["catch-panic", "limit", "request-id", "sensitive-headers", "timeout", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = { version = "2.5", features = ["serde"] }
