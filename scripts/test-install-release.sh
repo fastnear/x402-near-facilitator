@@ -48,4 +48,8 @@ test -x "$destination/deploy/promote-release.sh"
 test ! -e /opt/x402-near-facilitator/current-mainnet
 test ! -e /opt/x402-near-facilitator/current-testnet
 
+# The finished release directory must be root-owned and traversable by the
+# unprivileged service users, without granting write to group or other.
+test "$(stat -c '%U:%G %a' "$destination")" = "root:root 755"
+
 echo "installer integration test passed"

@@ -141,6 +141,11 @@ done
 
 chown -R root:root "$unpack"
 chmod -R go-w "$unpack"
+# The staging root is created mode 0700 so a partial release is never world
+# visible, but the finished version directory must be traversable by the
+# unprivileged service users that execute the binaries from it. Restore the
+# standard root-owned, world-readable release mode without granting write.
+chmod 0755 "$unpack"
 mv "$unpack" "$destination"
 
 echo "installed $version; no environment was promoted and no service was restarted"
