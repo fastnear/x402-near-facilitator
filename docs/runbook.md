@@ -34,14 +34,17 @@ private key, API key, or raw signed delegate in the change ticket.
 
 ## Known launch topology
 
-- The intended host is a small dedicated personal VPS: Linux x86-64 with
-  systemd and Nginx, provisioned solely for this service. Record its
-  provider, address, and baseline in this runbook once it exists.
+- The launch host is the dedicated AWS EC2 instance `x402-facilitator`
+  (`i-0537770b34b04b820`, t3.small, us-west-2a) at Elastic IP
+  `100.23.147.163`: Ubuntu 24.04 LTS x86-64, glibc 2.39, systemd 255,
+  encrypted gp3 root, IMDSv2 required, no IAM role. Ports 80/443 are
+  public; SSH is limited to the operator workstation address in security
+  group `sg-015857c4ae084d397`.
 - Production runs native binaries. Docker and Podman are not installed on the
   host; the OCI image is a release artifact, not the deployment mechanism.
-- `x402.mikedotexe.com` and `test.x402.mikedotexe.com` exist in DNS but
-  still resolve to the retired shared-host plan; repoint them to the
-  personal host before issuing TLS or enabling either vhost.
+- `x402.mikedotexe.com` and `test.x402.mikedotexe.com` resolve to the
+  launch host, but neither name is live until TLS issuance and the
+  remaining launch checklist gates complete.
 - Mainnet and testnet run on the known main host as separate service users,
   ports, keys, configs, and databases.
 

@@ -16,12 +16,11 @@ or conversation alone is not launch evidence.
 - [ ] Telemetry export confirmed disabled (no OTLP endpoint or header
       credential installed); sanitized journald output verified for both
       environments.
-- [ ] Route 53 records for both launch hostnames point only at the intended
+- [x] Route 53 records for both launch hostnames point only at the intended
       host; the change batch was previewed and confirmed, and the DNS-editing
-      AWS credential remains only on the operator workstation. (Both records
-      exist but resolve to the retired shared-host plan — see
-      [2026-07-22 DNS evidence](evidence/2026-07-22-launch-dns.md); repoint
-      them to the personal host.)
+      AWS credential remains only on the operator workstation. — 2026-07-22,
+      Mike Purvis,
+      [EC2 host and DNS repoint evidence](evidence/2026-07-22-ec2-host-and-dns-repoint.md)
 - [ ] One publicly trusted certificate covers exactly both launch hostnames;
       automated renewal, its Nginx reload hook, and expiry monitoring are
       verified.
