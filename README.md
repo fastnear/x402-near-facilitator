@@ -14,8 +14,8 @@ after the inner NEP-141 `ft_transfer` receipt succeeds.
 
 | Environment | Network | Planned URL | Asset | Initial payee |
 | --- | --- | --- | --- | --- |
-| Testnet | `near:testnet` | `https://test.x402.fastnear.com` | Circle test USDC | `merchant.mike.testnet` |
-| Mainnet | `near:mainnet` | `https://x402.fastnear.com` | Circle native USDC | `count.mike.near` |
+| Testnet | `near:testnet` | `https://test.x402.mikedotexe.com` | Circle test USDC | `merchant.mike.testnet` |
+| Mainnet | `near:mainnet` | `https://x402.mikedotexe.com` | Circle native USDC | `count.mike.near` |
 
 The service is intentionally narrow at launch:
 

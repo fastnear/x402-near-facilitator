@@ -6,7 +6,7 @@ or conversation alone is not launch evidence.
 
 ## Ownership and external prerequisites
 
-- [ ] FastNEAR operational owner and second incident contact recorded.
+- [ ] Operational owner and second incident contact recorded.
 - [ ] Mainnet and testnet Neon databases, migration roles, service roles,
       backups, and restore procedure verified.
 - [ ] Environment-specific observer logins can read only sanitized journal
@@ -14,11 +14,15 @@ or conversation alone is not launch evidence.
       read identities, hashes, payload bytes, terminal bodies, or API-key data.
 - [ ] Honeycomb environment, ingest-only credential, dashboard, and two launch
       triggers verified with sanitized events.
-- [ ] New least-privileged Cloudflare DNS token provisioned.
-- [ ] Origin certificate covers only both launch hostnames and Cloudflare uses
-      Full (strict).
-- [ ] Packaged Cloudflare origin allowlist matches both definitive IP lists;
-      proxied access succeeds and non-Cloudflare direct-origin access is denied.
+- [ ] Route 53 records for both launch hostnames point only at the intended
+      host; the change batch was previewed and confirmed, and the DNS-editing
+      AWS credential remains only on the operator workstation.
+- [ ] One publicly trusted certificate covers exactly both launch hostnames;
+      automated renewal, its Nginx reload hook, and expiry monitoring are
+      verified.
+- [ ] External verification shows both hostnames serve only packaged
+      endpoints over TLS, plain HTTP redirects to HTTPS, and unknown-hostname
+      or bare-IP requests are refused.
 - [ ] External 60-second `/readyz` checks configured for both hostnames.
 - [ ] Changed `fn-test-pro` SSH key investigated out-of-band; no key was
       accepted automatically. This host is not a launch dependency.

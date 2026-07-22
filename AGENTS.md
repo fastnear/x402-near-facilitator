@@ -76,8 +76,8 @@ pass. Record and resolve the incompatibility.
   secret file. Production `.env` files are prohibited.
 - Migrations use a separate privileged database role. The service role cannot
   create or alter schema.
-- Do not reuse credentials, Cloudflare tokens, databases, or relayer keys from
-  another FastNEAR service.
+- Do not reuse credentials, DNS or cloud API tokens, databases, or relayer
+  keys from another FastNEAR or personal service.
 
 ## Network and funds safety
 

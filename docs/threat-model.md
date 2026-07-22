@@ -79,9 +79,10 @@ quarantines the relayer. No recovery path signs replacement bytes.
   but do not eliminate this risk.
 - API clients can legitimately request many invalid preflights. Rate limits
   bound work but do not make public RPC exhaustion impossible.
-- Cloudflare is an availability and edge-security dependency. The application
-  still authenticates and limits requests because edge controls can be
-  bypassed by origin exposure or configuration error.
+- The origin is directly exposed to the public Internet with no CDN or proxy
+  tier absorbing floods or TLS-layer attacks. Nginx limits, API-key
+  authentication, and fail-closed readiness bound abuse, but volumetric
+  denial of service is mitigated only by the host's network.
 - Honeycomb receives sanitized operational metadata. Field allowlisting and
   review are still necessary before adding telemetry.
 - The pinned official `@x402/near@2.19.0` development/reference dependency

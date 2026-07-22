@@ -38,8 +38,8 @@ private key, API key, or raw signed delegate in the change ticket.
   (`core-m1`), Linux x86-64 with systemd and Nginx.
 - Production runs native binaries. Docker and Podman are not installed on the
   host; the OCI image is a release artifact, not the deployment mechanism.
-- `x402.fastnear.com` and `test.x402.fastnear.com` are not live until their
-  launch checklist DNS gates are checked.
+- `x402.mikedotexe.com` and `test.x402.mikedotexe.com` are not live until
+  their launch checklist DNS gates are checked.
 - Do not connect to or deploy through `fn-test-pro`: its observed ED25519 SSH
   fingerprint does not match the trusted entry. Resolve that discrepancy
   out-of-band rather than accepting a changed key.
@@ -142,24 +142,44 @@ URL, or private key.
 
 ### TLS and DNS
 
-Create a Cloudflare Origin CA certificate covering only
-`x402.fastnear.com` and `test.x402.fastnear.com`, store its private key
-root-only on the host, and configure the zone for Full (strict). A public
-Let's Encrypt certificate is an acceptable alternative if renewal is
-documented and tested.
+Both public names live in the personal Route 53 `mikedotexe.com` hosted zone
+(`ZEBBWSGTKUUP6`), managed with the operator workstation's `aws` CLI and its
+dedicated DNS IAM user. That credential can edit every record in the zone:
+treat it as a deployment secret, never install it on the service host, and
+apply the mandatory mutation gate to DNS changes by previewing the exact
+change batch before `aws route53 change-resource-record-sets`.
 
-Use a new least-privileged Cloudflare token that can edit DNS only in the
-`fastnear.com` zone. Do not reuse a dashboard or processor token. Add proxied
-records for both names to the main host only after the local origin checks
-pass. Never commit the token or origin private key.
+Create A (and AAAA if the host has IPv6) records pointing
+`x402.mikedotexe.com` and `test.x402.mikedotexe.com` directly at the main
+host. There is no proxy or CDN tier: the origin is publicly reachable, and
+the deny-by-default Nginx configuration plus API-key authentication form the
+public boundary. Records may exist before the vhosts are enabled; unknown
+hostnames and bare-IP probes receive connection refusal from the packaged
+configuration.
 
-Immediately before cutover, compare
-`deploy/nginx/x402-near-cloudflare-only.conf` with Cloudflare's definitive
-`https://www.cloudflare.com/ips-v4` and `https://www.cloudflare.com/ips-v6`
-lists. Update and re-review the packaged file if either list differs. The
-facilitator virtual hosts allow only those proxy ranges plus loopback, so a
-stale list fails closed. Verify a proxied request succeeds and a direct-origin
-request from a non-Cloudflare address is denied.
+After DNS resolves to the host, issue one publicly trusted Let's Encrypt
+certificate covering exactly both names. First issuance needs a temporary
+minimal port-80 server for both names whose only location serves
+`/var/www/x402-near-acme`, because the packaged site cannot be enabled
+before the certificate lineage exists:
+
+```sh
+sudo install -d -m 0755 /var/www/x402-near-acme
+sudo certbot certonly --webroot -w /var/www/x402-near-acme \
+  -d x402.mikedotexe.com -d test.x402.mikedotexe.com \
+  --deploy-hook 'systemctl reload nginx'
+```
+
+Remove the bootstrap server after issuance; the packaged port-80 virtual
+hosts keep serving the ACME webroot for unattended renewals. Verify the
+certbot renewal timer is active and expiry monitoring exists. DNS-01 through
+the certbot Route 53 plugin is acceptable only with a separate IAM
+credential restricted to the two `_acme-challenge` TXT names; the broad
+zone credential never belongs on the host.
+
+Before cutover, verify from an external network that both hostnames serve
+only the packaged endpoints over TLS 1.2+, that plain HTTP redirects to
+HTTPS, and that a request for any other hostname or the bare IP is refused.
 
 ## Install a release
 
@@ -261,8 +281,6 @@ sudo systemctl daemon-reload
 sudo install -d -m 0755 /etc/nginx/snippets
 sudo install -m 0644 "$release/deploy/nginx/x402-near-proxy.conf" \
   /etc/nginx/snippets/x402-near-proxy.conf
-sudo install -m 0644 "$release/deploy/nginx/x402-near-cloudflare-only.conf" \
-  /etc/nginx/snippets/x402-near-cloudflare-only.conf
 sudo install -m 0644 "$release/deploy/nginx/x402-near-facilitator.conf" \
   /etc/nginx/sites-available/x402-near-facilitator
 sudo install -m 0644 \
@@ -442,8 +460,8 @@ Useful commands:
 systemctl status 'x402-near-facilitator@*' --no-pager
 journalctl -u x402-near-facilitator@mainnet --since '30 minutes ago'
 journalctl -u x402-near-facilitator@testnet --since '30 minutes ago'
-curl --fail --silent https://x402.fastnear.com/readyz
-curl --fail --silent https://test.x402.fastnear.com/readyz
+curl --fail --silent https://x402.mikedotexe.com/readyz
+curl --fail --silent https://test.x402.mikedotexe.com/readyz
 ```
 
 Do not paste full journal output into issues until it has been reviewed for
