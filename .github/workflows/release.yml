@@ -50,6 +50,10 @@ jobs:
 
           tag="$GITHUB_REF_NAME"
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          # actions/checkout materializes the trigger tag as a lightweight
+          # ref on the runner; restore the remote annotated tag object so
+          # the annotation and identity checks validate the pushed tag.
+          git fetch --force --no-tags origin "refs/tags/${tag}:refs/tags/${tag}"
           test "$(git cat-file -t "refs/tags/${tag}")" = tag
           checkout_commit="$(git rev-parse HEAD)"
           test "$(git rev-parse "${tag}^{commit}")" = "$checkout_commit"
@@ -779,6 +783,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p work/source
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           test "$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}")" = tag
           test "$(git rev-parse HEAD)" = "$COMMIT"
           test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$COMMIT"
