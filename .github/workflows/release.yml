@@ -565,7 +565,14 @@ jobs:
           source_date_epoch="$(git show -s --format=%ct "$COMMIT")"
           [[ "$source_date_epoch" =~ ^[0-9]+$ ]]
           export SOURCE_DATE_EPOCH="$source_date_epoch"
+          # dockerd rewrites the manifest during load and push, so a
+          # standalone BuildKit builder computes the registry-format digest;
+          # the publish step reuses this builder's cache and pushes exactly
+          # this manifest.
+          docker buildx create --name x402-release \
+            --driver docker-container --use
           docker buildx build \
+            --builder x402-release \
             --platform linux/amd64 \
             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
             --build-arg VERSION="$VERSION" \
@@ -573,12 +580,24 @@ jobs:
             --tag "${IMAGE}:${VERSION}" \
             --provenance=false \
             --metadata-file work/image-build-metadata.json \
-            --load \
+            --output type=image,push=false \
             .
           digest="$(
             jq -er '."containerimage.digest"' work/image-build-metadata.json
           )"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          # Load the identical cached build into dockerd only for the local
+          # label and --version validations below.
+          docker buildx build \
+            --builder x402-release \
+            --platform linux/amd64 \
+            --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+            --build-arg VERSION="$VERSION" \
+            --build-arg VCS_REF="$COMMIT" \
+            --tag "${IMAGE}:${VERSION}" \
+            --provenance=false \
+            --load \
+            .
           docker image inspect \
             --format '{{json .Config.Labels}}' \
             "${IMAGE}:${VERSION}" >work/local-labels.json
@@ -627,7 +646,26 @@ jobs:
               echo "error: GHCR inspection failed ambiguously" >&2
               exit 1
             fi
-            docker push "$reference"
+            source_date_epoch="$(git show -s --format=%ct "$COMMIT")"
+            [[ "$source_date_epoch" =~ ^[0-9]+$ ]]
+            docker buildx build \
+              --builder x402-release \
+              --platform linux/amd64 \
+              --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" \
+              --build-arg VERSION="$VERSION" \
+              --build-arg VCS_REF="$COMMIT" \
+              --tag "$reference" \
+              --provenance=false \
+              --metadata-file work/image-push-metadata.json \
+              --push \
+              .
+            pushed_digest="$(
+              jq -er '."containerimage.digest"' work/image-push-metadata.json
+            )"
+            test "$pushed_digest" = "$EXPECTED_DIGEST" || {
+              echo "error: pushed image digest does not match the validated build" >&2
+              exit 1
+            }
           fi
 
           docker buildx imagetools inspect "$reference" \
