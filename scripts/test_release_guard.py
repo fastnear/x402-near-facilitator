@@ -357,14 +357,25 @@ class ArtifactTests(unittest.TestCase):
             image_digest=IMAGE_DIGEST,
         )
 
-    def test_sbom_normalization_removes_run_specific_fields(self) -> None:
+    def test_sbom_normalization_pins_run_specific_fields(self) -> None:
         original = {
             "bomFormat": "CycloneDX",
             "metadata": {"timestamp": "now"},
             "serialNumber": "urn:uuid:random",
         }
         normalized = release_guard.normalize_sbom_document(original, COMMIT)
-        self.assertNotIn("serialNumber", normalized)
+        self.assertRegex(
+            normalized["serialNumber"],
+            r"^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}"
+            r"-[0-9a-f]{4}-[0-9a-f]{12}$",
+        )
+        self.assertNotEqual(normalized["serialNumber"], "urn:uuid:random")
+        self.assertEqual(
+            normalized["serialNumber"],
+            release_guard.normalize_sbom_document(original, COMMIT)[
+                "serialNumber"
+            ],
+        )
         self.assertNotIn("timestamp", normalized["metadata"])
         self.assertEqual(
             normalized["metadata"]["properties"],
