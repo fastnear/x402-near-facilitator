@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -318,7 +319,12 @@ def decide_stable_publication(
 
 def normalize_sbom_document(document: dict[str, Any], commit: str) -> dict[str, Any]:
     normalized = dict(document)
-    normalized.pop("serialNumber", None)
+    # attest-sbom recognizes CycloneDX only when bomFormat, specVersion, and
+    # serialNumber are all present, so the generator's random serialNumber is
+    # replaced with a commit-derived value rather than removed.
+    normalized["serialNumber"] = "urn:uuid:" + str(
+        uuid.uuid5(uuid.NAMESPACE_URL, f"x402-near-facilitator-sbom:{commit}")
+    )
     metadata = dict(normalized.get("metadata") or {})
     metadata.pop("timestamp", None)
     properties = [
