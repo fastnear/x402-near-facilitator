@@ -650,14 +650,20 @@ mod tests {
         let creds = Path::new("/run/credentials/x402-near-facilitator@testnet.service");
         assert!(path_is_within(creds, &creds.join("relayer-key")));
         // An empty $CREDENTIALS_DIRECTORY must never disable the mode check.
-        assert!(!path_is_within(Path::new(""), Path::new("/run/credentials/x/relayer-key")));
+        assert!(!path_is_within(
+            Path::new(""),
+            Path::new("/run/credentials/x/relayer-key")
+        ));
         // A sibling path that merely shares a name prefix is not inside.
         assert!(!path_is_within(
             creds,
             Path::new("/run/credentials/x402-near-facilitator@testnet.service.bak/relayer-key")
         ));
         // Unrelated absolute secrets stay outside the exception.
-        assert!(!path_is_within(creds, Path::new("/etc/x402-near-facilitator/mainnet.json")));
+        assert!(!path_is_within(
+            creds,
+            Path::new("/etc/x402-near-facilitator/mainnet.json")
+        ));
     }
 
     fn private_test_file(bytes: &[u8]) -> PathBuf {
