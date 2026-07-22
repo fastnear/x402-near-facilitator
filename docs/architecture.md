@@ -12,7 +12,7 @@ flowchart LR
     A["Primary NEAR RPC"]
     B["Independent backup NEAR RPC"]
     N["NEAR token receipts"]
-    O["Honeycomb via OTLP"]
+    O["Optional OTLP telemetry backend"]
 
     P --> R
     R -->|"/verify and /settle with API key"| F
@@ -52,7 +52,7 @@ The reusable mechanism owns:
 - final transaction lookup and inner receipt-graph validation.
 
 It has no HTTP authentication, tenant policy, PostgreSQL schema, deployment,
-or Honeycomb dependency.
+or telemetry dependency.
 
 ### Service boundary
 

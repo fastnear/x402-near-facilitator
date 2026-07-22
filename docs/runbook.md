@@ -1,7 +1,7 @@
 # Operations runbook
 
-Owner: Mike Purvis / FastNEAR. Record a second incident contact before mainnet
-launch. Commands below are examples for an operator who has already obtained
+Owner: Mike Purvis, operating solo. Record a second incident contact before
+mainnet launch. Commands below are examples for an operator who has already obtained
 the necessary authorization; they do not authorize external changes.
 
 ## Mandatory mutation gate
@@ -34,15 +34,14 @@ private key, API key, or raw signed delegate in the change ticket.
 
 ## Known launch topology
 
-- The intended host is the existing FastNEAR `fn-main-pro` machine
-  (`core-m1`), Linux x86-64 with systemd and Nginx.
+- The intended host is a small dedicated personal VPS: Linux x86-64 with
+  systemd and Nginx, provisioned solely for this service. Record its
+  provider, address, and baseline in this runbook once it exists.
 - Production runs native binaries. Docker and Podman are not installed on the
   host; the OCI image is a release artifact, not the deployment mechanism.
-- `x402.mikedotexe.com` and `test.x402.mikedotexe.com` are not live until
-  their launch checklist DNS gates are checked.
-- Do not connect to or deploy through `fn-test-pro`: its observed ED25519 SSH
-  fingerprint does not match the trusted entry. Resolve that discrepancy
-  out-of-band rather than accepting a changed key.
+- `x402.mikedotexe.com` and `test.x402.mikedotexe.com` exist in DNS but
+  still resolve to the retired shared-host plan; repoint them to the
+  personal host before issuing TLS or enabling either vhost.
 - Mainnet and testnet run on the known main host as separate service users,
   ports, keys, configs, and databases.
 
@@ -104,9 +103,14 @@ Never install a Mike credential on the service host.
 
 ### Databases
 
-Provision separate Neon mainnet and testnet databases with separate migration
-and service roles. Save credentials directly into the operator's secret
-manager. Do not reuse another FastNEAR database.
+Install PostgreSQL from distribution packages on the launch host, bound to
+loopback only. Create separate mainnet and testnet databases with separate
+migration and service roles. Save credentials directly into the operator's
+secret manager. Do not share the cluster with any other service.
+
+Schedule a nightly `pg_dump` of each database to a location off the host and
+test a restore before mainnet launch; there is no managed-provider backup or
+PITR behind this cluster.
 
 Apply forward-only migrations before a binary first uses the schema:
 
@@ -125,20 +129,20 @@ transaction hashes, account IDs, policies, terminal response bytes, or signed
 transaction bytes. Do not give an operator the service DML role merely to
 inspect readiness.
 
-### Honeycomb
+### Observability
 
-Create the FastNEAR Honeycomb environment and an ingest-only key. Provision the
-OTLP authorization header as a systemd credential, configure
-`service.name`, `service.version`, and `deployment.environment.name` resource
-attributes, and create exactly these initial triggers:
+Telemetry export is disabled at launch: install no OTLP endpoint or header
+credential. Sanitized journald output and the external 60-second `/readyz`
+monitor on both hostnames are the alerting surface; relayer balance and
+sponsorship budgets are checked in the daily review rather than by trigger
+automation.
 
-1. mainnet readiness/5xx or settlement-error degradation;
-2. low relayer balance, sponsorship budget over 80%, settlement pending over
-   two minutes, or relayer quarantine.
-
-Send a sanitized test event and verify that it contains no account ID, payment
-identifier, transaction/delegate hash label, API key, raw payload, database
-URL, or private key.
+If an OTLP backend is adopted later, provision its authorization header as a
+systemd credential, configure `service.name`, `service.version`, and
+`deployment.environment.name` resource attributes, send a sanitized test
+event, and verify it contains no account ID, payment identifier,
+transaction/delegate hash label, API key, raw payload, database URL, or
+private key before enabling it in production.
 
 ### TLS and DNS
 
@@ -149,9 +153,9 @@ treat it as a deployment secret, never install it on the service host, and
 apply the mandatory mutation gate to DNS changes by previewing the exact
 change batch before `aws route53 change-resource-record-sets`.
 
-Create A (and AAAA if the host has IPv6) records pointing
-`x402.mikedotexe.com` and `test.x402.mikedotexe.com` directly at the main
-host. There is no proxy or CDN tier: the origin is publicly reachable, and
+Create or repoint (`UPSERT`) A and, if the host has IPv6, AAAA records so
+`x402.mikedotexe.com` and `test.x402.mikedotexe.com` target the launch host
+directly. There is no proxy or CDN tier: the origin is publicly reachable, and
 the deny-by-default Nginx configuration plus API-key authentication form the
 public boundary. Records may exist before the vhosts are enabled; unknown
 hostnames and bare-IP probes receive connection refusal from the packaged
@@ -191,13 +195,13 @@ deployment tools and documentation. On an operator machine:
 
 ```sh
 gh release download vX.Y.Z \
-  --repo fastnear/x402-near-facilitator \
+  --repo mikedotexe/x402-near-facilitator \
   --pattern 'x402-near-facilitator-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz*'
 sha256sum --check \
   x402-near-facilitator-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256
 gh attestation verify \
   x402-near-facilitator-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz \
-  --repo fastnear/x402-near-facilitator
+  --repo mikedotexe/x402-near-facilitator
 ```
 
 Inspect the archive member list and extract
@@ -344,7 +348,7 @@ file to an issue.
 5. Run `scripts/verify-deployment.sh` from the matching source or release
    tooling against the public testnet URL.
 6. Complete fixture, authentication, funded transfer, duplicate, restart,
-   accepted-response-dropped, RPC failover, and telemetry gates.
+   accepted-response-dropped, RPC failover, and log-sanitization gates.
 7. Enable at boot only after those checks:
 
    ```sh
@@ -387,8 +391,8 @@ maximum sponsored reservation: 0.01 NEAR
 After a fresh confirmation, submit that exact signed delegate once. Any change
 to its bytes invalidates the confirmation. Require final success of the inner
 token receipt, the exact recipient balance delta, the terminal journal result,
-budget reconciliation, and sanitized telemetry. Replay the identical request
-and prove that no second transfer was created.
+budget reconciliation, and sanitized log evidence. Replay the identical
+request and prove that no second transfer was created.
 
 ## Mainnet deployment
 
@@ -427,8 +431,8 @@ That confirmation must occur immediately before submission, applies to one
 exact delegate, and expires if any field or signed bytes change. An
 indeterminate result is reconciled by its stored hash and exact bytes; never
 sign a retry. Verify final token receipt, recipient balance delta, journal
-terminal response, sponsorship reconciliation, and Honeycomb trace. Then test
-replay without another broadcast. Only after evidence review:
+terminal response, sponsorship reconciliation, and sanitized log evidence.
+Then test replay without another broadcast. Only after evidence review:
 
 ```sh
 sudo systemctl enable x402-near-facilitator@mainnet
@@ -436,12 +440,12 @@ sudo systemctl enable x402-near-facilitator@mainnet
 
 ## Routine checks
 
-- Public `/readyz` is checked every 60 seconds.
-- Honeycomb triggers cover availability and financial/reconciliation risk.
+- Public `/readyz` is checked every 60 seconds by the external monitor,
+  which is the only automated alerting at launch.
 - Review daily sponsorship use and relayer balance; refills are manual.
 - Review API clients, exact payee policy, and owner contacts monthly.
 - Confirm backups/PITR and perform a sanitized restore drill quarterly.
-- Patch the OS and rotate API, database, Honeycomb, and DNS credentials under
+- Patch the OS and rotate API, database, and DNS credentials under
   documented maintenance windows.
 - Confirm the recorded glibc/systemd baseline after host upgrades and rerun
   both binary `--version` smoke checks before the next promotion.

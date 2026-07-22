@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: FastNEAR x402 facilitator for NEAR
+  title: x402 facilitator for NEAR
   version: 0.1.1
   description: |
     API-key-gated x402 v2 exact-payment facilitator for Circle USDC on NEAR.

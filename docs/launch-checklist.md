@@ -7,17 +7,21 @@ or conversation alone is not launch evidence.
 ## Ownership and external prerequisites
 
 - [ ] Operational owner and second incident contact recorded.
-- [ ] Mainnet and testnet Neon databases, migration roles, service roles,
-      backups, and restore procedure verified.
+- [ ] Mainnet and testnet PostgreSQL databases on the launch host bind only
+      loopback, with separate migration and service roles, a nightly off-host
+      dump timer, and a tested restore procedure.
 - [ ] Environment-specific observer logins can read only sanitized journal
       state/timestamp/reason columns and global sponsorship totals; they cannot
       read identities, hashes, payload bytes, terminal bodies, or API-key data.
-- [ ] Honeycomb environment, ingest-only credential, dashboard, and two launch
-      triggers verified with sanitized events.
-- [x] Route 53 records for both launch hostnames point only at the intended
+- [ ] Telemetry export confirmed disabled (no OTLP endpoint or header
+      credential installed); sanitized journald output verified for both
+      environments.
+- [ ] Route 53 records for both launch hostnames point only at the intended
       host; the change batch was previewed and confirmed, and the DNS-editing
-      AWS credential remains only on the operator workstation. — 2026-07-22,
-      Mike Purvis, [launch DNS evidence](evidence/2026-07-22-launch-dns.md)
+      AWS credential remains only on the operator workstation. (Both records
+      exist but resolve to the retired shared-host plan — see
+      [2026-07-22 DNS evidence](evidence/2026-07-22-launch-dns.md); repoint
+      them to the personal host.)
 - [ ] One publicly trusted certificate covers exactly both launch hostnames;
       automated renewal, its Nginx reload hook, and expiry monitoring are
       verified.
@@ -30,7 +34,7 @@ or conversation alone is not launch evidence.
 
 ## Repository and supply chain
 
-- [ ] Public `fastnear/x402-near-facilitator` repository exists with Apache-2.0
+- [ ] Public `mikedotexe/x402-near-facilitator` repository exists with Apache-2.0
       license, branch protection, security contact, and no secrets in history.
 - [ ] Rust 1.93, `Cargo.lock`, x402-rs crate versions, NEAR crate versions, and
       official `@x402/near` oracle version are pinned.
@@ -147,7 +151,8 @@ or conversation alone is not launch evidence.
       its exact recipient balance delta, journal result, and telemetry evidence
       are recorded.
 - [ ] Replay creates no second transfer and returns the recorded outcome.
-- [ ] Restart, RPC failover, low-balance, and Honeycomb alert drills pass.
+- [ ] Restart, RPC failover, low-balance, and external-monitor alert drills
+      pass.
 - [ ] Testnet service is enabled at boot only after all prior gates.
 
 ## Mainnet launch
@@ -178,7 +183,7 @@ or conversation alone is not launch evidence.
       `x402-relayer.mike.near`; 0.01 NEAR maximum reservation.
 - [ ] Final mainnet token receipt, exact recipient balance delta, transaction
       hash, terminal journal response, actual sponsorship cost, and sanitized
-      Honeycomb trace recorded.
+      log evidence recorded.
 - [ ] Mainnet replay proves one transfer and stable terminal response.
 - [ ] Recovery, rollback, API-key revocation, and operator escalation drills
       pass.

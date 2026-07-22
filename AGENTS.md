@@ -57,7 +57,7 @@ pass. Record and resolve the incompatibility.
 ## Security and privacy
 
 - Never commit, print, log, trace, snapshot, fixture, or paste a real API key,
-  funded private key, credentialed database URL, Honeycomb key, live signed
+  funded private key, credentialed database URL, telemetry key, live signed
   delegate, or funded wallet credential.
 - The sole key-material exception is the checked-in interoperability fixture
   generator: its deterministic public test keys must be labeled `DO NOT FUND`,
@@ -77,7 +77,7 @@ pass. Record and resolve the incompatibility.
 - Migrations use a separate privileged database role. The service role cannot
   create or alter schema.
 - Do not reuse credentials, DNS or cloud API tokens, databases, or relayer
-  keys from another FastNEAR or personal service.
+  keys from any other service.
 
 ## Network and funds safety
 

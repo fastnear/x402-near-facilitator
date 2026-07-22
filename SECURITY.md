@@ -11,7 +11,7 @@ expected security impact, and whether the issue may already have been
 exploited. Use unfunded deterministic keys and redacted configuration in every
 reproduction.
 
-FastNEAR will acknowledge a complete report within three business days,
+The maintainer will acknowledge a complete report within three business days,
 coordinate remediation and disclosure with the reporter, and publish an
 advisory for affected released versions. This response target is not a
 guarantee of a fix timeline.
