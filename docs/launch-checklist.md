@@ -14,9 +14,10 @@ or conversation alone is not launch evidence.
       read identities, hashes, payload bytes, terminal bodies, or API-key data.
 - [ ] Honeycomb environment, ingest-only credential, dashboard, and two launch
       triggers verified with sanitized events.
-- [ ] Route 53 records for both launch hostnames point only at the intended
+- [x] Route 53 records for both launch hostnames point only at the intended
       host; the change batch was previewed and confirmed, and the DNS-editing
-      AWS credential remains only on the operator workstation.
+      AWS credential remains only on the operator workstation. — 2026-07-22,
+      Mike Purvis, [launch DNS evidence](evidence/2026-07-22-launch-dns.md)
 - [ ] One publicly trusted certificate covers exactly both launch hostnames;
       automated renewal, its Nginx reload hook, and expiry monitoring are
       verified.
