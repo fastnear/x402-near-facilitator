@@ -1413,14 +1413,12 @@ jobs:
                 echo "A newer GitHub release exists; preserving its GHCR latest alias."
                 ;;
               publish)
-                docker pull --platform linux/amd64 "${IMAGE}@${DIGEST}"
-                image_id="$(
-                  docker image inspect \
-                    --format '{{.Id}}' \
-                    "${IMAGE}@${DIGEST}"
-                )"
-                docker tag "$image_id" "${IMAGE}:latest"
-                docker push "${IMAGE}:latest"
+                # dockerd rewrites manifests on push; copy the immutable
+                # version manifest to the alias registry-side so the latest
+                # digest equals the version digest exactly.
+                docker buildx imagetools create \
+                  --tag "${IMAGE}:latest" \
+                  "${IMAGE}@${DIGEST}"
                 ;;
               *)
                 echo "error: invalid latest alias action: ${latest_action}" >&2
