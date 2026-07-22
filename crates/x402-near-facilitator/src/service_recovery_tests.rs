@@ -116,6 +116,10 @@ impl MockRpc {
         self.state.relayer_balance.store(balance, Ordering::SeqCst);
     }
 
+    fn set_relayer_nonce(&self, nonce: u64) {
+        self.state.relayer_nonce.store(nonce, Ordering::SeqCst);
+    }
+
     fn set_lookup(&self, hash: CryptoHash, plan: LookupPlan) {
         self.state
             .lookups
@@ -231,6 +235,7 @@ impl NearRpc for MockRpc {
         signed_transaction: SignedTransaction,
     ) -> Result<TransactionLookup, NearRpcError> {
         self.state.sends.fetch_add(1, Ordering::SeqCst);
+        let relayer_nonce = signed_transaction.transaction.nonce().nonce();
         let bytes = borsh::to_vec(&signed_transaction)
             .map_err(|_| NearRpcError::InvalidSignedTransaction)?;
         self.state
@@ -245,10 +250,15 @@ impl NearRpc for MockRpc {
             .map_err(|_| NearRpcError::InvalidResponse("mock send plan lock poisoned"))?;
         match plan {
             SendPlan::Unknown => Ok(TransactionLookup::Unknown),
-            SendPlan::FinalSuccess => Ok(TransactionLookup::Final(Box::new(final_outcome(
-                signed_transaction,
-                OutcomeShape::Successful,
-            )?))),
+            SendPlan::FinalSuccess => {
+                self.state
+                    .relayer_nonce
+                    .store(relayer_nonce, Ordering::SeqCst);
+                Ok(TransactionLookup::Final(Box::new(final_outcome(
+                    signed_transaction,
+                    OutcomeShape::Successful,
+                )?)))
+            }
         }
     }
 
@@ -407,15 +417,39 @@ impl TestDatabase {
 struct TestContext {
     state: AppState,
     rpc: MockRpc,
+    backup_rpc: MockRpc,
     payer: Signer,
     client_id: Uuid,
 }
 
 async fn build_context(database: &TestDatabase) -> TestResult<TestContext> {
-    let config = service_config()?;
     let rpc = MockRpc::new();
-    let primary: Arc<dyn NearRpc> = Arc::new(rpc.clone());
-    let backup: Arc<dyn NearRpc> = Arc::new(rpc.clone());
+    let backup_rpc = MockRpc::new();
+    let state = build_state(database, rpc.clone(), backup_rpc.clone())?;
+    database
+        .store
+        .upsert_relayer(
+            "near:testnet",
+            TEST_RELAYER,
+            &state.provider.relayer_public_key().to_string(),
+        )
+        .await?;
+    let client_id = seed_client(&database.store).await?;
+    let payer_account: AccountId = TEST_PAYER.parse()?;
+    let payer = InMemorySigner::from_seed(payer_account, KeyType::ED25519, "recovery-payer-seed");
+    Ok(TestContext {
+        state,
+        rpc,
+        backup_rpc,
+        payer,
+        client_id,
+    })
+}
+
+fn build_state(database: &TestDatabase, rpc: MockRpc, backup_rpc: MockRpc) -> TestResult<AppState> {
+    let config = service_config()?;
+    let primary: Arc<dyn NearRpc> = Arc::new(rpc);
+    let backup: Arc<dyn NearRpc> = Arc::new(backup_rpc);
     let relayer_account: AccountId = TEST_RELAYER.parse()?;
     let relayer =
         InMemorySigner::from_seed(relayer_account, KeyType::ED25519, "recovery-relayer-seed");
@@ -433,23 +467,11 @@ async fn build_context(database: &TestDatabase) -> TestResult<TestContext> {
         readiness,
         Metrics::for_tests(),
     );
-    database
-        .store
-        .upsert_relayer(
-            "near:testnet",
-            TEST_RELAYER,
-            &state.provider.relayer_public_key().to_string(),
-        )
-        .await?;
-    let client_id = seed_client(&database.store).await?;
-    let payer_account: AccountId = TEST_PAYER.parse()?;
-    let payer = InMemorySigner::from_seed(payer_account, KeyType::ED25519, "recovery-payer-seed");
-    Ok(TestContext {
-        state,
-        rpc,
-        payer,
-        client_id,
-    })
+    Ok(state)
+}
+
+fn restarted_state(database: &TestDatabase, context: &TestContext) -> TestResult<AppState> {
+    build_state(database, context.rpc.clone(), context.backup_rpc.clone())
 }
 
 fn service_config() -> TestResult<ServiceConfig> {
@@ -705,6 +727,325 @@ fn terminal_json(record: &SettlementRecord) -> TestResult<Value> {
     )?)
 }
 
+async fn settlement_record(state: &AppState, id: Uuid) -> TestResult<SettlementRecord> {
+    state
+        .store
+        .settlement(id)
+        .await?
+        .ok_or_else(|| std::io::Error::other("settlement disappeared").into())
+}
+
+async fn settlement_states(pool: &PgPool, id: Uuid) -> TestResult<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT to_state FROM settlement_events WHERE settlement_id = $1 ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_distinct_settlements_serialize_unique_relayer_nonces() -> TestResult {
+    let Some(database) =
+        TestDatabase::from_explicit_environment("concurrent_distinct_relayer_nonces").await?
+    else {
+        return Ok(());
+    };
+    let result = async {
+        let context = build_context(&database).await?;
+        let first = reserve_payment(&context, 1, 1_050, "concurrent_distinct_nonce_0001").await?;
+        let second = reserve_payment(&context, 2, 1_050, "concurrent_distinct_nonce_0002").await?;
+        context.rpc.set_send_plan(SendPlan::FinalSuccess);
+        make_ready(&context.state);
+
+        tokio::join!(
+            run_new_settlement(context.state.clone(), first.id, first.request.raw.clone()),
+            run_new_settlement(context.state.clone(), second.id, second.request.raw.clone()),
+        );
+
+        let first_record = settlement_record(&context.state, first.id).await?;
+        let second_record = settlement_record(&context.state, second.id).await?;
+        assert_eq!(first_record.state, SettlementState::Succeeded);
+        assert_eq!(second_record.state, SettlementState::Succeeded);
+        let mut journaled_nonces = [
+            first_record
+                .relayer_nonce
+                .ok_or_else(|| std::io::Error::other("first relayer nonce is absent"))?,
+            second_record
+                .relayer_nonce
+                .ok_or_else(|| std::io::Error::other("second relayer nonce is absent"))?,
+        ];
+        journaled_nonces.sort();
+        assert_eq!(journaled_nonces, ["1", "2"]);
+
+        let mut sent_nonces = context
+            .rpc
+            .sent_bytes()
+            .iter()
+            .map(|bytes| {
+                x402_chain_near::decode_signed_transaction(bytes)
+                    .map(|transaction| transaction.transaction.nonce().nonce())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        sent_nonces.sort_unstable();
+        assert_eq!(sent_nonces, vec![1, 2]);
+        assert_eq!(context.rpc.sends(), 2);
+        assert_eq!(context.backup_rpc.sends(), 0);
+        for id in [first.id, second.id] {
+            assert_eq!(
+                settlement_states(&database.pool, id).await?,
+                vec!["reserved", "prepared", "submitted", "succeeded"]
+            );
+        }
+        Ok::<(), Box<dyn Error + Send + Sync>>(())
+    }
+    .await;
+    database.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn backup_final_result_recovers_when_primary_is_unknown() -> TestResult {
+    let Some(database) =
+        TestDatabase::from_explicit_environment("backup_final_primary_unknown").await?
+    else {
+        return Ok(());
+    };
+    let result = async {
+        let context = build_context(&database).await?;
+        let reserved =
+            reserve_payment(&context, 1, 1_050, "backup_final_primary_unknown_01").await?;
+        let submitted = prepare_payment(&context, &reserved, 0, true).await?;
+        let signed = x402_chain_near::decode_signed_transaction(&submitted.transaction_bytes)?;
+        context.backup_rpc.set_lookup(
+            submitted.transaction_hash,
+            LookupPlan::Final(Box::new(final_outcome(signed, OutcomeShape::Successful)?)),
+        );
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
+
+        reconcile(&restarted).await?;
+
+        let record = settlement_record(&restarted, reserved.id).await?;
+        assert_eq!(record.state, SettlementState::Succeeded);
+        assert_eq!(terminal_json(&record)?["success"], true);
+        assert_eq!(context.rpc.sends(), 0);
+        assert_eq!(context.backup_rpc.sends(), 0);
+        assert!(restarted.readiness.snapshot().reconciliation);
+        Ok::<(), Box<dyn Error + Send + Sync>>(())
+    }
+    .await;
+    database.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn conflicting_primary_and_backup_finals_fail_closed() -> TestResult {
+    let Some(database) =
+        TestDatabase::from_explicit_environment("conflicting_primary_backup_finals").await?
+    else {
+        return Ok(());
+    };
+    let result = async {
+        let context = build_context(&database).await?;
+        let reserved =
+            reserve_payment(&context, 1, 1_050, "conflicting_primary_backup_0001").await?;
+        let submitted = prepare_payment(&context, &reserved, 0, true).await?;
+        let signed = x402_chain_near::decode_signed_transaction(&submitted.transaction_bytes)?;
+        context.rpc.set_lookup(
+            submitted.transaction_hash,
+            LookupPlan::Final(Box::new(final_outcome(
+                signed.clone(),
+                OutcomeShape::Successful,
+            )?)),
+        );
+        context.backup_rpc.set_lookup(
+            submitted.transaction_hash,
+            LookupPlan::Final(Box::new(final_outcome(
+                signed,
+                OutcomeShape::WrongTransactionHash,
+            )?)),
+        );
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
+
+        let Err(error) = reconcile(&restarted).await else {
+            return Err(std::io::Error::other(
+                "conflicting final outcomes unexpectedly reconciled",
+            )
+            .into());
+        };
+        assert!(error.to_string().contains("database state is inconsistent"));
+        let record = settlement_record(&restarted, reserved.id).await?;
+        assert_eq!(record.state, SettlementState::Submitted);
+        assert!(record.terminal_response_bytes.is_none());
+        assert!(!restarted.readiness.snapshot().reconciliation);
+        assert_eq!(context.rpc.sends(), 0);
+        assert_eq!(context.backup_rpc.sends(), 0);
+        Ok::<(), Box<dyn Error + Send + Sync>>(())
+    }
+    .await;
+    database.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn both_unknown_with_advanced_backup_nonce_quarantines_relayer() -> TestResult {
+    let Some(database) =
+        TestDatabase::from_explicit_environment("unknown_advanced_backup_nonce").await?
+    else {
+        return Ok(());
+    };
+    let result = async {
+        let context = build_context(&database).await?;
+        let reserved =
+            reserve_payment(&context, 1, 1_050, "unknown_advanced_backup_nonce_01").await?;
+        let submitted = prepare_payment(&context, &reserved, 0, true).await?;
+        context.backup_rpc.set_relayer_nonce(1);
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
+
+        let Err(error) = reconcile(&restarted).await else {
+            return Err(std::io::Error::other(
+                "an advanced nonce with two unknown lookups unexpectedly reconciled",
+            )
+            .into());
+        };
+        assert!(error.to_string().contains("database state is inconsistent"));
+        let record = settlement_record(&restarted, reserved.id).await?;
+        assert_eq!(record.state, SettlementState::Submitted);
+        assert_eq!(
+            record.outer_transaction_bytes.as_deref(),
+            Some(submitted.transaction_bytes.as_slice())
+        );
+        assert!(
+            !restarted
+                .store
+                .relayer_is_active(
+                    "near:testnet",
+                    TEST_RELAYER,
+                    &restarted.provider.relayer_public_key().to_string(),
+                )
+                .await?
+        );
+        assert!(!restarted.readiness.snapshot().relayer);
+        assert!(!restarted.readiness.snapshot().reconciliation);
+        assert_eq!(context.rpc.sends(), 0);
+        assert_eq!(context.backup_rpc.sends(), 0);
+        Ok::<(), Box<dyn Error + Send + Sync>>(())
+    }
+    .await;
+    database.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+async fn crash_restart_matrix_recovers_each_durable_transition_exactly_once() -> TestResult {
+    let Some(database) =
+        TestDatabase::from_explicit_environment("crash_restart_transition_matrix").await?
+    else {
+        return Ok(());
+    };
+    let result = async {
+        let context = build_context(&database).await?;
+
+        let reserved = reserve_payment(&context, 1, 1_050, "crash_after_reserved_000001").await?;
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
+        reconcile(&restarted).await?;
+        let reserved_record = settlement_record(&restarted, reserved.id).await?;
+        assert_eq!(reserved_record.state, SettlementState::Failed);
+        assert!(reserved_record.outer_transaction_bytes.is_none());
+        assert_eq!(
+            terminal_json(&reserved_record)?["error"]["code"],
+            "recovered_before_prepare"
+        );
+        assert_eq!(
+            settlement_states(&database.pool, reserved.id).await?,
+            vec!["reserved", "failed"]
+        );
+
+        let prepared = reserve_payment(&context, 2, 1_050, "crash_after_prepared_00001").await?;
+        let prepared = prepare_payment(&context, &prepared, 0, false).await?;
+        context.rpc.set_send_plan(SendPlan::FinalSuccess);
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
+        reconcile(&restarted).await?;
+        let prepared_record = settlement_record(&restarted, prepared.record.id).await?;
+        assert_eq!(prepared_record.state, SettlementState::Succeeded);
+        assert_eq!(
+            prepared_record.outer_transaction_bytes.as_deref(),
+            Some(prepared.transaction_bytes.as_slice())
+        );
+        assert_eq!(
+            settlement_states(&database.pool, prepared.record.id).await?,
+            vec!["reserved", "prepared", "submitted", "succeeded"]
+        );
+
+        let submitted = reserve_payment(&context, 3, 1_050, "crash_after_submitted_0001").await?;
+        let submitted = prepare_payment(&context, &submitted, 1, true).await?;
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
+        reconcile(&restarted).await?;
+        let submitted_record = settlement_record(&restarted, submitted.record.id).await?;
+        assert_eq!(submitted_record.state, SettlementState::Succeeded);
+        assert_eq!(
+            submitted_record.outer_transaction_bytes.as_deref(),
+            Some(submitted.transaction_bytes.as_slice())
+        );
+        assert_eq!(
+            settlement_states(&database.pool, submitted.record.id).await?,
+            vec!["reserved", "prepared", "submitted", "succeeded"]
+        );
+
+        let broadcast = reserve_payment(&context, 4, 1_050, "crash_after_broadcast_0001").await?;
+        let broadcast = prepare_payment(&context, &broadcast, 2, true).await?;
+        let lookup = context
+            .state
+            .provider
+            .broadcast_exact(&broadcast.transaction_bytes)
+            .await?;
+        let TransactionLookup::Final(outcome) = lookup else {
+            return Err(std::io::Error::other(
+                "post-broadcast crash fixture did not return a final result",
+            )
+            .into());
+        };
+        context
+            .rpc
+            .set_lookup(broadcast.transaction_hash, LookupPlan::Final(outcome));
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
+        reconcile(&restarted).await?;
+        let broadcast_record = settlement_record(&restarted, broadcast.record.id).await?;
+        assert_eq!(broadcast_record.state, SettlementState::Succeeded);
+        assert_eq!(
+            broadcast_record.outer_transaction_bytes.as_deref(),
+            Some(broadcast.transaction_bytes.as_slice())
+        );
+        assert_eq!(
+            settlement_states(&database.pool, broadcast.record.id).await?,
+            vec!["reserved", "prepared", "submitted", "succeeded"]
+        );
+
+        assert_eq!(context.rpc.sends(), 3);
+        assert_eq!(
+            context.rpc.sent_bytes(),
+            vec![
+                prepared.transaction_bytes,
+                submitted.transaction_bytes,
+                broadcast.transaction_bytes,
+            ]
+        );
+        assert_eq!(context.backup_rpc.sends(), 0);
+        assert!(restarted.readiness.snapshot().reconciliation);
+        Ok::<(), Box<dyn Error + Send + Sync>>(())
+    }
+    .await;
+    database.cleanup().await?;
+    result
+}
+
 #[tokio::test]
 async fn incomplete_inner_receipt_remains_submitted_and_unready() -> TestResult {
     let Some(database) =
@@ -722,19 +1063,15 @@ async fn incomplete_inner_receipt_remains_submitted_and_unready() -> TestResult 
             prepared.transaction_hash,
             LookupPlan::Final(Box::new(outcome)),
         );
-        make_ready(&context.state);
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
 
-        reconcile(&context.state).await?;
+        reconcile(&restarted).await?;
 
-        let record = context
-            .state
-            .store
-            .settlement(reserved.id)
-            .await?
-            .ok_or_else(|| std::io::Error::other("settlement disappeared"))?;
+        let record = settlement_record(&restarted, reserved.id).await?;
         assert_eq!(record.state, SettlementState::Submitted);
         assert!(record.terminal_response_bytes.is_none());
-        assert!(!context.state.readiness.snapshot().reconciliation);
+        assert!(!restarted.readiness.snapshot().reconciliation);
         assert_eq!(context.rpc.sends(), 0);
         Ok::<(), Box<dyn Error + Send + Sync>>(())
     }
@@ -760,19 +1097,15 @@ async fn wrong_final_transaction_identity_remains_submitted_and_unready() -> Tes
             prepared.transaction_hash,
             LookupPlan::Final(Box::new(outcome)),
         );
-        make_ready(&context.state);
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
 
-        reconcile(&context.state).await?;
+        reconcile(&restarted).await?;
 
-        let record = context
-            .state
-            .store
-            .settlement(reserved.id)
-            .await?
-            .ok_or_else(|| std::io::Error::other("settlement disappeared"))?;
+        let record = settlement_record(&restarted, reserved.id).await?;
         assert_eq!(record.state, SettlementState::Submitted);
         assert!(record.terminal_response_bytes.is_none());
-        assert!(!context.state.readiness.snapshot().reconciliation);
+        assert!(!restarted.readiness.snapshot().reconciliation);
         assert_eq!(context.rpc.sends(), 0);
         Ok::<(), Box<dyn Error + Send + Sync>>(())
     }
@@ -846,12 +1179,7 @@ async fn hard_balance_stop_prevents_preparation_and_broadcast() -> TestResult {
         )
         .await;
 
-        let record = context
-            .state
-            .store
-            .settlement(reserved.id)
-            .await?
-            .ok_or_else(|| std::io::Error::other("settlement disappeared"))?;
+        let record = settlement_record(&context.state, reserved.id).await?;
         assert_eq!(record.state, SettlementState::Failed);
         assert_eq!(record.terminal_http_status, Some(503));
         assert!(record.outer_transaction_bytes.is_none());
@@ -1091,20 +1419,17 @@ async fn unknown_recovery_rebroadcasts_only_exact_stored_bytes() -> TestResult {
         let reserved = reserve_payment(&context, 1, 1_050, "recovery_exact_rebroadcast_01").await?;
         let submitted = prepare_payment(&context, &reserved, 0, true).await?;
         context.rpc.set_send_plan(SendPlan::FinalSuccess);
-        make_ready(&context.state);
+        let restarted = restarted_state(&database, &context)?;
+        make_ready(&restarted);
 
-        reconcile(&context.state).await?;
+        reconcile(&restarted).await?;
 
-        let record = context
-            .state
-            .store
-            .settlement(reserved.id)
-            .await?
-            .ok_or_else(|| std::io::Error::other("settlement disappeared"))?;
+        let record = settlement_record(&restarted, reserved.id).await?;
         assert_eq!(record.state, SettlementState::Succeeded);
         assert_eq!(context.rpc.sends(), 1);
+        assert_eq!(context.backup_rpc.sends(), 0);
         assert_eq!(context.rpc.sent_bytes(), vec![submitted.transaction_bytes]);
-        assert!(context.state.readiness.snapshot().reconciliation);
+        assert!(restarted.readiness.snapshot().reconciliation);
         Ok::<(), Box<dyn Error + Send + Sync>>(())
     }
     .await;

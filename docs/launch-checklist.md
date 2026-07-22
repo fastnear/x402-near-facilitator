@@ -6,19 +6,27 @@ or conversation alone is not launch evidence.
 
 ## Ownership and external prerequisites
 
-- [ ] FastNEAR operational owner and second incident contact recorded.
-- [ ] Mainnet and testnet Neon databases, migration roles, service roles,
-      backups, and restore procedure verified.
+- [ ] Operational owner and second incident contact recorded.
+- [ ] Mainnet and testnet PostgreSQL databases on the launch host bind only
+      loopback, with separate migration and service roles, a nightly off-host
+      dump timer, and a tested restore procedure.
 - [ ] Environment-specific observer logins can read only sanitized journal
       state/timestamp/reason columns and global sponsorship totals; they cannot
       read identities, hashes, payload bytes, terminal bodies, or API-key data.
-- [ ] Honeycomb environment, ingest-only credential, dashboard, and two launch
-      triggers verified with sanitized events.
-- [ ] New least-privileged Cloudflare DNS token provisioned.
-- [ ] Origin certificate covers only both launch hostnames and Cloudflare uses
-      Full (strict).
-- [ ] Packaged Cloudflare origin allowlist matches both definitive IP lists;
-      proxied access succeeds and non-Cloudflare direct-origin access is denied.
+- [ ] Telemetry export confirmed disabled (no OTLP endpoint or header
+      credential installed); sanitized journald output verified for both
+      environments.
+- [x] Route 53 records for both launch hostnames point only at the intended
+      host; the change batch was previewed and confirmed, and the DNS-editing
+      AWS credential remains only on the operator workstation. — 2026-07-22,
+      Mike Purvis,
+      [EC2 host and DNS repoint evidence](evidence/2026-07-22-ec2-host-and-dns-repoint.md)
+- [ ] One publicly trusted certificate covers exactly both launch hostnames;
+      automated renewal, its Nginx reload hook, and expiry monitoring are
+      verified.
+- [ ] External verification shows both hostnames serve only packaged
+      endpoints over TLS, plain HTTP redirects to HTTPS, and unknown-hostname
+      or bare-IP requests are refused.
 - [ ] External 60-second `/readyz` checks configured for both hostnames.
 - [ ] Changed `fn-test-pro` SSH key investigated out-of-band; no key was
       accepted automatically. This host is not a launch dependency.
@@ -120,8 +128,10 @@ or conversation alone is not launch evidence.
       preview also names the asset, payer, recipient, relayer or `none`, and
       maximum sponsored NEAR; no confirmation is reused after a command or
       field changes.
-- [ ] `x402-relayer.mike.testnet` exists with dedicated service and separate
-      recovery keys and 10 testnet NEAR.
+- [x] `x402-relayer.mike.testnet` exists with dedicated service and separate
+      recovery keys and exactly 10 testnet NEAR initial funding. — 2026-07-19,
+      Mike Purvis / FastNEAR,
+      [relayer provisioning evidence](evidence/2026-07-19-relayer-provisioning.md)
 - [ ] Testnet config, Circle contract, RPC identity, exact merchant policy,
       budget, relayer key, and balance pass readiness.
 - [ ] Public testnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass.
@@ -140,7 +150,8 @@ or conversation alone is not launch evidence.
       its exact recipient balance delta, journal result, and telemetry evidence
       are recorded.
 - [ ] Replay creates no second transfer and returns the recorded outcome.
-- [ ] Restart, RPC failover, low-balance, and Honeycomb alert drills pass.
+- [ ] Restart, RPC failover, low-balance, and external-monitor alert drills
+      pass.
 - [ ] Testnet service is enabled at boot only after all prior gates.
 
 ## Mainnet launch
@@ -157,8 +168,10 @@ or conversation alone is not launch evidence.
       preview also names the asset, payer, recipient, relayer or `none`, and
       maximum sponsored NEAR; no confirmation is reused after a command or
       field changes.
-- [ ] `x402-relayer.mike.near` exists with dedicated service and separate
-      recovery keys and exactly the approved 5 NEAR initial funding.
+- [x] `x402-relayer.mike.near` exists with dedicated service and separate
+      recovery keys and exactly the approved 5 NEAR initial funding. —
+      2026-07-19, Mike Purvis / FastNEAR,
+      [relayer provisioning evidence](evidence/2026-07-19-relayer-provisioning.md)
 - [ ] Mainnet config, Circle contract, RPC identity, exact `count.mike.near`
       policy, 0.50 NEAR global cap, 0.10 NEAR client cap, relayer key, and
       balance pass readiness.
@@ -169,7 +182,7 @@ or conversation alone is not launch evidence.
       `x402-relayer.mike.near`; 0.01 NEAR maximum reservation.
 - [ ] Final mainnet token receipt, exact recipient balance delta, transaction
       hash, terminal journal response, actual sponsorship cost, and sanitized
-      Honeycomb trace recorded.
+      log evidence recorded.
 - [ ] Mainnet replay proves one transfer and stable terminal response.
 - [ ] Recovery, rollback, API-key revocation, and operator escalation drills
       pass.

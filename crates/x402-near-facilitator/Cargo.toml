@@ -49,7 +49,7 @@ tracing-opentelemetry = "0.33"
 tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
-x402-chain-near = { version = "=0.1.0", path = "../x402-chain-near" }
+x402-chain-near = { version = "=0.1.1", path = "../x402-chain-near" }
 x402-facilitator-local.workspace = true
 x402-types.workspace = true
 zeroize.workspace = true

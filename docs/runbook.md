@@ -1,7 +1,7 @@
 # Operations runbook
 
-Owner: Mike Purvis / FastNEAR. Record a second incident contact before mainnet
-launch. Commands below are examples for an operator who has already obtained
+Owner: Mike Purvis, operating solo. Record a second incident contact before
+mainnet launch. Commands below are examples for an operator who has already obtained
 the necessary authorization; they do not authorize external changes.
 
 ## Mandatory mutation gate
@@ -34,15 +34,17 @@ private key, API key, or raw signed delegate in the change ticket.
 
 ## Known launch topology
 
-- The intended host is the existing FastNEAR `fn-main-pro` machine
-  (`core-m1`), Linux x86-64 with systemd and Nginx.
+- The launch host is the dedicated AWS EC2 instance `x402-facilitator`
+  (`i-0537770b34b04b820`, t3.small, us-west-2a) at Elastic IP
+  `100.23.147.163`: Ubuntu 24.04 LTS x86-64, glibc 2.39, systemd 255,
+  encrypted gp3 root, IMDSv2 required, no IAM role. Ports 80/443 are
+  public; SSH is limited to the operator workstation address in security
+  group `sg-015857c4ae084d397`.
 - Production runs native binaries. Docker and Podman are not installed on the
   host; the OCI image is a release artifact, not the deployment mechanism.
-- `x402.fastnear.com` and `test.x402.fastnear.com` are not live until their
-  launch checklist DNS gates are checked.
-- Do not connect to or deploy through `fn-test-pro`: its observed ED25519 SSH
-  fingerprint does not match the trusted entry. Resolve that discrepancy
-  out-of-band rather than accepting a changed key.
+- `x402.mikedotexe.com` and `test.x402.mikedotexe.com` resolve to the
+  launch host, but neither name is live until TLS issuance and the
+  remaining launch checklist gates complete.
 - Mainnet and testnet run on the known main host as separate service users,
   ports, keys, configs, and databases.
 
@@ -104,9 +106,14 @@ Never install a Mike credential on the service host.
 
 ### Databases
 
-Provision separate Neon mainnet and testnet databases with separate migration
-and service roles. Save credentials directly into the operator's secret
-manager. Do not reuse another FastNEAR database.
+Install PostgreSQL from distribution packages on the launch host, bound to
+loopback only. Create separate mainnet and testnet databases with separate
+migration and service roles. Save credentials directly into the operator's
+secret manager. Do not share the cluster with any other service.
+
+Schedule a nightly `pg_dump` of each database to a location off the host and
+test a restore before mainnet launch; there is no managed-provider backup or
+PITR behind this cluster.
 
 Apply forward-only migrations before a binary first uses the schema:
 
@@ -125,41 +132,61 @@ transaction hashes, account IDs, policies, terminal response bytes, or signed
 transaction bytes. Do not give an operator the service DML role merely to
 inspect readiness.
 
-### Honeycomb
+### Observability
 
-Create the FastNEAR Honeycomb environment and an ingest-only key. Provision the
-OTLP authorization header as a systemd credential, configure
-`service.name`, `service.version`, and `deployment.environment.name` resource
-attributes, and create exactly these initial triggers:
+Telemetry export is disabled at launch: install no OTLP endpoint or header
+credential. Sanitized journald output and the external 60-second `/readyz`
+monitor on both hostnames are the alerting surface; relayer balance and
+sponsorship budgets are checked in the daily review rather than by trigger
+automation.
 
-1. mainnet readiness/5xx or settlement-error degradation;
-2. low relayer balance, sponsorship budget over 80%, settlement pending over
-   two minutes, or relayer quarantine.
-
-Send a sanitized test event and verify that it contains no account ID, payment
-identifier, transaction/delegate hash label, API key, raw payload, database
-URL, or private key.
+If an OTLP backend is adopted later, provision its authorization header as a
+systemd credential, configure `service.name`, `service.version`, and
+`deployment.environment.name` resource attributes, send a sanitized test
+event, and verify it contains no account ID, payment identifier,
+transaction/delegate hash label, API key, raw payload, database URL, or
+private key before enabling it in production.
 
 ### TLS and DNS
 
-Create a Cloudflare Origin CA certificate covering only
-`x402.fastnear.com` and `test.x402.fastnear.com`, store its private key
-root-only on the host, and configure the zone for Full (strict). A public
-Let's Encrypt certificate is an acceptable alternative if renewal is
-documented and tested.
+Both public names live in the personal Route 53 `mikedotexe.com` hosted zone
+(`ZEBBWSGTKUUP6`), managed with the operator workstation's `aws` CLI and its
+dedicated DNS IAM user. That credential can edit every record in the zone:
+treat it as a deployment secret, never install it on the service host, and
+apply the mandatory mutation gate to DNS changes by previewing the exact
+change batch before `aws route53 change-resource-record-sets`.
 
-Use a new least-privileged Cloudflare token that can edit DNS only in the
-`fastnear.com` zone. Do not reuse a dashboard or processor token. Add proxied
-records for both names to the main host only after the local origin checks
-pass. Never commit the token or origin private key.
+Create or repoint (`UPSERT`) A and, if the host has IPv6, AAAA records so
+`x402.mikedotexe.com` and `test.x402.mikedotexe.com` target the launch host
+directly. There is no proxy or CDN tier: the origin is publicly reachable, and
+the deny-by-default Nginx configuration plus API-key authentication form the
+public boundary. Records may exist before the vhosts are enabled; unknown
+hostnames and bare-IP probes receive connection refusal from the packaged
+configuration.
 
-Immediately before cutover, compare
-`deploy/nginx/x402-near-cloudflare-only.conf` with Cloudflare's definitive
-`https://www.cloudflare.com/ips-v4` and `https://www.cloudflare.com/ips-v6`
-lists. Update and re-review the packaged file if either list differs. The
-facilitator virtual hosts allow only those proxy ranges plus loopback, so a
-stale list fails closed. Verify a proxied request succeeds and a direct-origin
-request from a non-Cloudflare address is denied.
+After DNS resolves to the host, issue one publicly trusted Let's Encrypt
+certificate covering exactly both names. First issuance needs a temporary
+minimal port-80 server for both names whose only location serves
+`/var/www/x402-near-acme`, because the packaged site cannot be enabled
+before the certificate lineage exists:
+
+```sh
+sudo install -d -m 0755 /var/www/x402-near-acme
+sudo certbot certonly --webroot -w /var/www/x402-near-acme \
+  -d x402.mikedotexe.com -d test.x402.mikedotexe.com \
+  --deploy-hook 'systemctl reload nginx'
+```
+
+Remove the bootstrap server after issuance; the packaged port-80 virtual
+hosts keep serving the ACME webroot for unattended renewals. Verify the
+certbot renewal timer is active and expiry monitoring exists. DNS-01 through
+the certbot Route 53 plugin is acceptable only with a separate IAM
+credential restricted to the two `_acme-challenge` TXT names; the broad
+zone credential never belongs on the host.
+
+Before cutover, verify from an external network that both hostnames serve
+only the packaged endpoints over TLS 1.2+, that plain HTTP redirects to
+HTTPS, and that a request for any other hostname or the bare IP is refused.
 
 ## Install a release
 
@@ -261,8 +288,6 @@ sudo systemctl daemon-reload
 sudo install -d -m 0755 /etc/nginx/snippets
 sudo install -m 0644 "$release/deploy/nginx/x402-near-proxy.conf" \
   /etc/nginx/snippets/x402-near-proxy.conf
-sudo install -m 0644 "$release/deploy/nginx/x402-near-cloudflare-only.conf" \
-  /etc/nginx/snippets/x402-near-cloudflare-only.conf
 sudo install -m 0644 "$release/deploy/nginx/x402-near-facilitator.conf" \
   /etc/nginx/sites-available/x402-near-facilitator
 sudo install -m 0644 \
@@ -326,7 +351,7 @@ file to an issue.
 5. Run `scripts/verify-deployment.sh` from the matching source or release
    tooling against the public testnet URL.
 6. Complete fixture, authentication, funded transfer, duplicate, restart,
-   accepted-response-dropped, RPC failover, and telemetry gates.
+   accepted-response-dropped, RPC failover, and log-sanitization gates.
 7. Enable at boot only after those checks:
 
    ```sh
@@ -369,8 +394,8 @@ maximum sponsored reservation: 0.01 NEAR
 After a fresh confirmation, submit that exact signed delegate once. Any change
 to its bytes invalidates the confirmation. Require final success of the inner
 token receipt, the exact recipient balance delta, the terminal journal result,
-budget reconciliation, and sanitized telemetry. Replay the identical request
-and prove that no second transfer was created.
+budget reconciliation, and sanitized log evidence. Replay the identical
+request and prove that no second transfer was created.
 
 ## Mainnet deployment
 
@@ -409,8 +434,8 @@ That confirmation must occur immediately before submission, applies to one
 exact delegate, and expires if any field or signed bytes change. An
 indeterminate result is reconciled by its stored hash and exact bytes; never
 sign a retry. Verify final token receipt, recipient balance delta, journal
-terminal response, sponsorship reconciliation, and Honeycomb trace. Then test
-replay without another broadcast. Only after evidence review:
+terminal response, sponsorship reconciliation, and sanitized log evidence.
+Then test replay without another broadcast. Only after evidence review:
 
 ```sh
 sudo systemctl enable x402-near-facilitator@mainnet
@@ -418,12 +443,12 @@ sudo systemctl enable x402-near-facilitator@mainnet
 
 ## Routine checks
 
-- Public `/readyz` is checked every 60 seconds.
-- Honeycomb triggers cover availability and financial/reconciliation risk.
+- Public `/readyz` is checked every 60 seconds by the external monitor,
+  which is the only automated alerting at launch.
 - Review daily sponsorship use and relayer balance; refills are manual.
 - Review API clients, exact payee policy, and owner contacts monthly.
 - Confirm backups/PITR and perform a sanitized restore drill quarterly.
-- Patch the OS and rotate API, database, Honeycomb, and DNS credentials under
+- Patch the OS and rotate API, database, and DNS credentials under
   documented maintenance windows.
 - Confirm the recorded glibc/systemd baseline after host upgrades and rerun
   both binary `--version` smoke checks before the next promotion.
@@ -442,8 +467,8 @@ Useful commands:
 systemctl status 'x402-near-facilitator@*' --no-pager
 journalctl -u x402-near-facilitator@mainnet --since '30 minutes ago'
 journalctl -u x402-near-facilitator@testnet --since '30 minutes ago'
-curl --fail --silent https://x402.fastnear.com/readyz
-curl --fail --silent https://test.x402.fastnear.com/readyz
+curl --fail --silent https://x402.mikedotexe.com/readyz
+curl --fail --silent https://test.x402.mikedotexe.com/readyz
 ```
 
 Do not paste full journal output into issues until it has been reviewed for

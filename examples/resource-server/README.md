@@ -13,7 +13,7 @@ resource-server instance.
 
 ```sh
 npm ci
-export FACILITATOR_URL=https://test.x402.fastnear.com
+export FACILITATOR_URL=https://test.x402.mikedotexe.com
 export FACILITATOR_API_KEY_FILE=/secure/path/test-resource-server-api-key
 export NETWORK=near:testnet
 export ASSET=3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af

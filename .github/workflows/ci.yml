@@ -81,6 +81,9 @@ jobs:
       - name: Run repository checks
         run: ./scripts/check.sh
 
+      - name: Exercise packaged installer on the production OS baseline
+        run: sudo ./scripts/test-install-release.sh
+
       - name: Audit official HTTP client dependency
         run: npm --prefix conformance/http-client audit --audit-level=high
 
@@ -98,20 +101,20 @@ jobs:
           set -euo pipefail
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
-          mkdir -p "$work/conf.d" "$work/snippets" "$work/certs" "$work/private"
+          mkdir -p "$work/conf.d" "$work/snippets" \
+            "$work/letsencrypt/live/x402.mikedotexe.com"
           cp deploy/nginx/x402-near-facilitator.conf "$work/conf.d/default.conf"
           cp deploy/nginx/x402-near-proxy.conf "$work/snippets/"
-          cp deploy/nginx/x402-near-cloudflare-only.conf "$work/snippets/"
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-            -subj /CN=x402.fastnear.com \
-            -keyout "$work/private/x402.fastnear.com-origin.key" \
-            -out "$work/certs/x402.fastnear.com-origin.pem" >/dev/null 2>&1
+            -subj /CN=x402.mikedotexe.com \
+            -keyout "$work/letsencrypt/live/x402.mikedotexe.com/privkey.pem" \
+            -out "$work/letsencrypt/live/x402.mikedotexe.com/fullchain.pem" \
+            >/dev/null 2>&1
           docker run --rm \
             --entrypoint nginx \
             -v "$work/conf.d:/etc/nginx/conf.d:ro" \
             -v "$work/snippets:/etc/nginx/snippets:ro" \
-            -v "$work/certs:/etc/ssl/certs:ro" \
-            -v "$work/private:/etc/ssl/private:ro" \
+            -v "$work/letsencrypt:/etc/letsencrypt:ro" \
             nginx:1.28.0-alpine@sha256:30f1c0d78e0ad60901648be663a710bdadf19e4c10ac6782c235200619158284 \
             -t
 

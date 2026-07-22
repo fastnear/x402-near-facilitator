@@ -102,8 +102,8 @@ awk -v root="$archive_root/" '
       exit 1
     }
     count = split($0, parts, "/")
-    for (index = 1; index <= count; index += 1) {
-      if (parts[index] == "..") {
+    for (part_number = 1; part_number <= count; part_number += 1) {
+      if (parts[part_number] == "..") {
         exit 1
       }
     }
