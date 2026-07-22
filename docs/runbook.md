@@ -195,13 +195,13 @@ deployment tools and documentation. On an operator machine:
 
 ```sh
 gh release download vX.Y.Z \
-  --repo mikedotexe/x402-near-facilitator \
+  --repo fastnear/x402-near-facilitator \
   --pattern 'x402-near-facilitator-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz*'
 sha256sum --check \
   x402-near-facilitator-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256
 gh attestation verify \
   x402-near-facilitator-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz \
-  --repo mikedotexe/x402-near-facilitator
+  --repo fastnear/x402-near-facilitator
 ```
 
 Inspect the archive member list and extract

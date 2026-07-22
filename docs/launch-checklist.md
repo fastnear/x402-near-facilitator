@@ -34,7 +34,7 @@ or conversation alone is not launch evidence.
 
 ## Repository and supply chain
 
-- [ ] Public `mikedotexe/x402-near-facilitator` repository exists with Apache-2.0
+- [ ] Public `fastnear/x402-near-facilitator` repository exists with Apache-2.0
       license, branch protection, security contact, and no secrets in history.
 - [ ] Rust 1.93, `Cargo.lock`, x402-rs crate versions, NEAR crate versions, and
       official `@x402/near` oracle version are pinned.
