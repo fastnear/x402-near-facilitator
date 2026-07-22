@@ -17,13 +17,13 @@ LoadCredential=database-url:/etc/x402-near-facilitator/credentials/%i/database-u
 LoadCredential=database-direct-url:/etc/x402-near-facilitator/credentials/%i/database-direct-url
 LoadCredential=relayer-key:/etc/x402-near-facilitator/credentials/%i/relayer-key
 LoadCredential=api-key-pepper:/etc/x402-near-facilitator/credentials/%i/api-key-pepper
-LoadCredential=otel-headers:/etc/x402-near-facilitator/credentials/%i/otel-headers
 Environment=DATABASE_URL_FILE=%d/database-url
 Environment=DATABASE_DIRECT_URL_FILE=%d/database-direct-url
 Environment=RELAYER_KEY_FILE=%d/relayer-key
 Environment=API_KEY_PEPPER_FILE=%d/api-key-pepper
-Environment=OTEL_EXPORTER_OTLP_HEADERS_FILE=%d/otel-headers
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=https://api.honeycomb.io
+# Telemetry export is disabled at launch. Adopting an OTLP backend later
+# adds the endpoint, headers credential, and headers-file variable through
+# a local drop-in after the sanitized-event verification.
 Environment=OTEL_SERVICE_NAME=x402-near-facilitator
 Environment=RUST_LOG=x402_near_facilitator=info,x402_chain_near=info,tower_http=info
 

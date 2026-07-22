@@ -21,7 +21,7 @@ is configured for the native deployment, or a secret value is supplied inline.
 | `DATABASE_DIRECT_URL_FILE` | `database-direct-url` | Direct PostgreSQL URL for session leadership; may equal the application URL only when it is already direct |
 | `RELAYER_KEY_FILE` | `relayer-key` | Dedicated relayer service key; never the Mike recovery key |
 | `API_KEY_PEPPER_FILE` | `api-key-pepper` | Random HMAC pepper independent of all API keys |
-| `OTEL_EXPORTER_OTLP_HEADERS_FILE` | `otel-headers` | OTLP authorization header; optional, export stays disabled without it |
+| `OTEL_EXPORTER_OTLP_HEADERS_FILE` | `otel-headers` | OTLP authorization header; absent at launch, added by a systemd drop-in only when telemetry is adopted |
 
 Files must contain only the value, end with a newline, be owned by root, and be
 mode 0600 before systemd imports them. The service should trim one terminal
