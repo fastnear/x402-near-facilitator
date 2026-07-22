@@ -594,7 +594,7 @@ class WorkflowPolicyTests(unittest.TestCase):
             "scripts/release_guard.py decide-stable"
         )
         publication = workflow.rindex("gh api --method PATCH")
-        latest = workflow.rindex('--tag "${IMAGE}:latest"')
+        latest = workflow.rindex("--data-binary @work/alias-source-manifest.json")
         immutable_check = workflow.rindex(
             "scripts/release_guard.py validate-checkpoint"
         )

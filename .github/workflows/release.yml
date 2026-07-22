@@ -1413,12 +1413,42 @@ jobs:
                 echo "A newer GitHub release exists; preserving its GHCR latest alias."
                 ;;
               publish)
-                # dockerd rewrites manifests on push; copy the immutable
-                # version manifest to the alias registry-side so the latest
-                # digest equals the version digest exactly.
-                docker buildx imagetools create \
-                  --tag "${IMAGE}:latest" \
-                  "${IMAGE}@${DIGEST}"
+                # buildx imagetools create wraps a single-platform image in a
+                # fresh index with a different digest, and dockerd rewrites
+                # manifests on push, so neither can make the alias digest equal
+                # the immutable version digest. Copy the exact version manifest
+                # bytes to the alias through the registry API instead.
+                registry_path="${GITHUB_REPOSITORY,,}"
+                alias_token="$(
+                  curl -fsSL -u "${GITHUB_ACTOR}:${GH_TOKEN}" \
+                    "https://ghcr.io/token?service=ghcr.io&scope=repository:${registry_path}:pull,push" |
+                    jq -er '.token'
+                )"
+                alias_accept='application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.index.v1+json'
+                alias_media_type="$(
+                  curl -fsSL -I \
+                    -H "Authorization: Bearer ${alias_token}" \
+                    -H "Accept: ${alias_accept}" \
+                    "https://ghcr.io/v2/${registry_path}/manifests/${DIGEST}" |
+                    tr -d '\r' |
+                    awk -F': ' 'tolower($1) == "content-type" { print $2 }'
+                )"
+                test -n "$alias_media_type"
+                curl -fsSL \
+                  -H "Authorization: Bearer ${alias_token}" \
+                  -H "Accept: ${alias_media_type}" \
+                  "https://ghcr.io/v2/${registry_path}/manifests/${DIGEST}" \
+                  -o work/alias-source-manifest.json
+                # The alias must be a byte-identical copy of the version image.
+                test "$(
+                  python3 -c 'import hashlib,sys; print("sha256:" + hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+                    work/alias-source-manifest.json
+                )" = "$DIGEST"
+                curl -fsSL -X PUT \
+                  -H "Authorization: Bearer ${alias_token}" \
+                  -H "Content-Type: ${alias_media_type}" \
+                  --data-binary @work/alias-source-manifest.json \
+                  "https://ghcr.io/v2/${registry_path}/manifests/latest"
                 ;;
               *)
                 echo "error: invalid latest alias action: ${latest_action}" >&2
