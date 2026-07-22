@@ -445,6 +445,15 @@ fn ensure_private_mode(path: &Path) -> Result<(), ConfigError> {
             path: path.to_owned(),
         });
     }
+    // systemd's LoadCredential materializes secrets under $CREDENTIALS_DIRECTORY
+    // as 0440 root:root guarded by a POSIX ACL that grants read access only to
+    // the service user. stat's group bits then report the ACL mask rather than
+    // real group access, so the raw-mode check below would reject a file that
+    // is in fact isolated to this process. Trust systemd's own credentials
+    // directory; every other path stays strictly owner-only.
+    if is_within_systemd_credentials(path) {
+        return Ok(());
+    }
     let mode = metadata.permissions().mode();
     if mode & 0o077 != 0 {
         return Err(ConfigError::InsecureSecretMode {
@@ -452,6 +461,21 @@ fn ensure_private_mode(path: &Path) -> Result<(), ConfigError> {
         });
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn is_within_systemd_credentials(path: &Path) -> bool {
+    // $CREDENTIALS_DIRECTORY is set only by systemd and always points at the
+    // per-unit ramfs mount that holds LoadCredential secrets.
+    match env::var_os("CREDENTIALS_DIRECTORY") {
+        Some(dir) => path_is_within(&PathBuf::from(dir), path),
+        None => false,
+    }
+}
+
+#[cfg(unix)]
+fn path_is_within(directory: &Path, path: &Path) -> bool {
+    !directory.as_os_str().is_empty() && path.starts_with(directory)
 }
 
 #[cfg(not(unix))]
@@ -619,6 +643,21 @@ mod tests {
             assert!(read_secret(&path).is_err());
             let _remove = std::fs::remove_file(path);
         }
+    }
+
+    #[test]
+    fn systemd_credentials_directory_scopes_the_mode_exception() {
+        let creds = Path::new("/run/credentials/x402-near-facilitator@testnet.service");
+        assert!(path_is_within(creds, &creds.join("relayer-key")));
+        // An empty $CREDENTIALS_DIRECTORY must never disable the mode check.
+        assert!(!path_is_within(Path::new(""), Path::new("/run/credentials/x/relayer-key")));
+        // A sibling path that merely shares a name prefix is not inside.
+        assert!(!path_is_within(
+            creds,
+            Path::new("/run/credentials/x402-near-facilitator@testnet.service.bak/relayer-key")
+        ));
+        // Unrelated absolute secrets stay outside the exception.
+        assert!(!path_is_within(creds, Path::new("/etc/x402-near-facilitator/mainnet.json")));
     }
 
     fn private_test_file(bytes: &[u8]) -> PathBuf {
