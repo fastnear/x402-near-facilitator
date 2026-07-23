@@ -174,25 +174,34 @@ or conversation alone is not launch evidence.
       preview also names the asset, payer, recipient, relayer or `none`, and
       maximum sponsored NEAR; no confirmation is reused after a command or
       field changes.
-- [x] `x402-relayer.mike.near` exists with dedicated service and separate
-      recovery keys and exactly the approved 5 NEAR initial funding. —
-      2026-07-19, Mike Purvis / FastNEAR,
-      [relayer provisioning evidence](evidence/2026-07-19-relayer-provisioning.md)
-- [ ] Mainnet config, Circle contract, RPC identity, exact `count.mike.near`
+- [x] The mainnet relayer exists with dedicated service and separate recovery
+      keys. The original `x402-relayer.mike.near` (2026-07-19) became
+      unrecoverable — its keys were lost and 5 NEAR is locked — so a fresh
+      `x402-relayer2.mike.near` subaccount of `mike.near` was created
+      2026-07-23 (5 NEAR, service key preserved in the credential store,
+      `mike.near` recovery key), [mainnet go-live
+      evidence](evidence/2026-07-23-mainnet-golive.md).
+- [x] Mainnet config, Circle contract, RPC identity, exact `count.mike.near`
       policy, 0.50 NEAR global cap, 0.10 NEAR client cap, relayer key, and
-      balance pass readiness.
-- [ ] Public mainnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass.
-- [ ] Human confirms immediately before broadcast:
+      balance pass readiness. — 2026-07-23 (`/readyz` true).
+- [x] Public mainnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass. —
+      2026-07-23, [evidence](evidence/2026-07-23-mainnet-golive.md)
+- [x] Human confirms immediately before broadcast:
       `near:mainnet`; the exact configured Circle native-USDC contract; 1,000
       atomic units; `mike.near`; `count.mike.near`;
-      `x402-relayer.mike.near`; 0.01 NEAR maximum reservation.
-- [ ] Final mainnet token receipt, exact recipient balance delta, transaction
+      `x402-relayer2.mike.near`; 0.01 NEAR maximum reservation. — 2026-07-23
+- [x] Final mainnet token receipt, exact recipient balance delta, transaction
       hash, terminal journal response, actual sponsorship cost, and sanitized
-      log evidence recorded.
-- [ ] Mainnet replay proves one transfer and stable terminal response.
+      log evidence recorded. — tx
+      `3KpKfbGcgKTsnbF9cj9y6Eh3oRM2yLdSfXXxV6RPgQrs`, SuccessValue,
+      0.000334 NEAR ([evidence](evidence/2026-07-23-mainnet-golive.md))
+- [x] Mainnet replay proves one transfer and stable terminal response. —
+      2026-07-23, `duplicate_settlement`, unchanged relayer balance.
 - [ ] Recovery, rollback, API-key revocation, and operator escalation drills
-      pass.
-- [ ] Mainnet service is enabled at boot after owner go/no-go review.
+      pass. (Idempotent replay and fail-closed-on-RPC-lag observed; explicit
+      recovery/rollback/revocation drills still to run.)
+- [x] Mainnet service is enabled at boot after owner go/no-go review. —
+      2026-07-23, after funded acceptance.
 
 ## Distribution evidence
 

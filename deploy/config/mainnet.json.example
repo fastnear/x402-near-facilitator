@@ -7,7 +7,7 @@
   "asset": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
   "asset_symbol": "USDC",
   "minimum_amount": "1000",
-  "relayer_account_id": "x402-relayer.mike.near",
+  "relayer_account_id": "x402-relayer2.mike.near",
   "max_inner_gas": 30000000000000,
   "database_max_connections": 10,
   "request_limits": {
