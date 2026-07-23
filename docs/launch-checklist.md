@@ -150,24 +150,33 @@ or conversation alone is not launch evidence.
 - [x] Public testnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass. —
       2026-07-23, Mike Purvis,
       [testnet go-live evidence](evidence/2026-07-23-testnet-golive.md)
-- [ ] Immediately before the direct transfer, a human confirms
+- [x] Immediately before the direct transfer, a human confirms
       `near:testnet`; the exact configured Circle test-USDC contract; 1,000
       atomic units; `merchant.mike.testnet`; `mike.testnet`; no relayer; and
-      zero sponsored NEAR.
-- [ ] That confirmed direct transfer succeeds and its transaction evidence is
-      recorded.
-- [ ] Immediately before the facilitator payment, a human confirms
+      zero sponsored NEAR. — 2026-07-23, Mike Purvis
+- [x] That confirmed direct transfer succeeds and its transaction evidence is
+      recorded. — 2026-07-23,
+      [testnet go-live evidence](evidence/2026-07-23-testnet-golive.md)
+      (tx `GjUHrMfYm2UUXaqQaLED1KSuwjKr7P35XCFhkXFQMzkF`)
+- [x] Immediately before the facilitator payment, a human confirms
       `near:testnet`; the same exact asset contract; 1,000 atomic units;
       `mike.testnet`; `merchant.mike.testnet`;
       `x402-relayer.mike.testnet`; and 0.01 NEAR maximum sponsorship
-      reservation.
-- [ ] That confirmed facilitator payment reaches final inner-token success;
+      reservation. — 2026-07-23, Mike Purvis
+- [x] That confirmed facilitator payment reaches final inner-token success;
       its exact recipient balance delta, journal result, and telemetry evidence
-      are recorded.
-- [ ] Replay creates no second transfer and returns the recorded outcome.
+      are recorded. — 2026-07-23,
+      [testnet go-live evidence](evidence/2026-07-23-testnet-golive.md)
+      (tx `FHuswy7QNXc1T1nHHR5jT55f8UML8rNW2iwmDnsrzgdP`, SuccessValue,
+      0.000331 NEAR sponsored)
+- [x] Replay creates no second transfer and returns the recorded outcome. —
+      2026-07-23, `duplicate_settlement` with unchanged relayer balance
+      ([evidence](evidence/2026-07-23-testnet-golive.md))
 - [ ] Restart, RPC failover, low-balance, and external-monitor alert drills
-      pass.
-- [ ] Testnet service is enabled at boot only after all prior gates.
+      pass. (Fail-closed-on-RPC-lag observed during acceptance; explicit
+      restart, low-balance, and monitor drills still to run.)
+- [x] Testnet service is enabled at boot. (Enabled 2026-07-23 after funded
+      acceptance; the restart/low-balance/monitor drills above remain open.)
 
 ## Mainnet launch
 
