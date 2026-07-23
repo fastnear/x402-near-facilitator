@@ -5343,7 +5343,7 @@ dependencies = [
 
 [[package]]
 name = "x402-chain-near"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5379,7 +5379,7 @@ dependencies = [
 
 [[package]]
 name = "x402-near-facilitator"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
