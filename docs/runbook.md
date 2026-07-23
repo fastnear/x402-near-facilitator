@@ -447,7 +447,13 @@ sudo systemctl enable x402-near-facilitator@mainnet
   which is the only automated alerting at launch.
 - Review daily sponsorship use and relayer balance; refills are manual.
 - Review API clients, exact payee policy, and owner contacts monthly.
-- Confirm backups/PITR and perform a sanitized restore drill quarterly.
+- The `x402-near-backup.timer` systemd timer dumps both databases nightly to
+  `/var/backups/x402-near/` (root-only, 14-day retention). Confirm the timer
+  is active, ship the dumps off-host, and perform a sanitized restore drill
+  (stream a dump through root into a scratch database) quarterly.
+- For sanitized state triage use the environment observer login at
+  `/root/x402-near-migration/<env>-observer-url`, which can read only
+  settlement state/timestamps/reason and global sponsorship totals.
 - Patch the OS and rotate API, database, and DNS credentials under
   documented maintenance windows.
 - Confirm the recorded glibc/systemd baseline after host upgrades and rerun
@@ -569,6 +575,12 @@ proof of absence. Do not change provider or re-sign until the stored
 transaction and relayer nonce are reconciled.
 
 ## Rollback
+
+The rollback target must be a release that actually runs on this host.
+`v0.1.1` does **not**: it predates the systemd credentials-directory fix in
+`v0.1.2` and fails to load credentials on this systemd version, so the only
+viable rollback target is a future release built on `v0.1.2` or later. Verify
+the candidate on the host before relying on it.
 
 1. Stop the affected systemd instance.
 2. Confirm the preceding release supports the current schema.
