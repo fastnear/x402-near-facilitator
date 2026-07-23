@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: x402 facilitator for NEAR
-  version: 0.1.2
+  version: 0.1.3
   description: |
     API-key-gated x402 v2 exact-payment facilitator for Circle USDC on NEAR.
     Each deployed server is pinned to one network. Expected payment rejection
