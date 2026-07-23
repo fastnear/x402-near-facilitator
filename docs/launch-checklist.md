@@ -7,13 +7,12 @@ or conversation alone is not launch evidence.
 ## Ownership and external prerequisites
 
 - [ ] Operational owner and second incident contact recorded.
-- [~] Mainnet and testnet PostgreSQL databases on the launch host bind only
+- [x] Mainnet and testnet PostgreSQL databases on the launch host bind only
       loopback, with separate migration and service roles, a nightly dump
-      timer, and a tested restore procedure. — 2026-07-23; loopback, roles,
-      the nightly `x402-near-backup.timer`, and a passing restore drill are in
-      place, [operational hardening](evidence/2026-07-23-operational-hardening.md).
-      The **off-host** copy of the dumps is still pending an AWS S3 permission
-      grant.
+      timer with off-host copy, and a tested restore procedure. — 2026-07-23;
+      loopback, roles, the nightly `x402-near-backup.timer` pushing to a
+      hardened S3 bucket via a least-privilege instance role, and a passing
+      restore drill, [operational hardening](evidence/2026-07-23-operational-hardening.md).
 - [x] Environment-specific observer logins can read only sanitized settlement
       state/timestamp/reason columns and global sponsorship totals; they cannot
       read identities, hashes, payload bytes, terminal bodies, or API-key data.

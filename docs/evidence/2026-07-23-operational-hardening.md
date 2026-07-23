@@ -80,13 +80,14 @@ activate delivery.
 
 ## Off-host backup
 
-A private S3 bucket (`x402-near-backups-341982967115`, block-public,
-AES-256 default encryption, versioning, 90-day lifecycle) holds the dumps,
-and the backup script pushes each dump to it when the host has credentials.
-An encrypted EBS snapshot of the root volume provides an immediate off-host
-restore point. The recurring host-to-S3 push is not yet active: it requires
-either an instance IAM role granting `s3:PutObject` to the bucket
-(preferred; no static key on the host) or periodic manual EBS snapshots.
+The nightly dumps are pushed to a private S3 bucket
+(`x402-near-backups-341982967115`, block-public, AES-256 default
+encryption, versioning, 90-day lifecycle). The host authenticates with an
+instance IAM role (`x402-near-backup-role`) whose only permission is
+`s3:PutObject` to the `dumps/` prefix — verified least-privilege: the host
+can write but cannot list, read, or delete, and holds no static credential
+(temporary credentials arrive through IMDSv2). An encrypted EBS snapshot of
+the root volume provides an additional immediate restore point.
 
 ## Deferred
 
