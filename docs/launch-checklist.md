@@ -7,27 +7,36 @@ or conversation alone is not launch evidence.
 ## Ownership and external prerequisites
 
 - [ ] Operational owner and second incident contact recorded.
-- [ ] Mainnet and testnet PostgreSQL databases on the launch host bind only
-      loopback, with separate migration and service roles, a nightly off-host
-      dump timer, and a tested restore procedure.
-- [ ] Environment-specific observer logins can read only sanitized journal
+- [~] Mainnet and testnet PostgreSQL databases on the launch host bind only
+      loopback, with separate migration and service roles, a nightly dump
+      timer, and a tested restore procedure. — 2026-07-23; loopback, roles,
+      the nightly `x402-near-backup.timer`, and a passing restore drill are in
+      place, [operational hardening](evidence/2026-07-23-operational-hardening.md).
+      The **off-host** copy of the dumps is still pending an AWS S3 permission
+      grant.
+- [x] Environment-specific observer logins can read only sanitized settlement
       state/timestamp/reason columns and global sponsorship totals; they cannot
       read identities, hashes, payload bytes, terminal bodies, or API-key data.
-- [ ] Telemetry export confirmed disabled (no OTLP endpoint or header
+      — 2026-07-23, boundary verified,
+      [operational hardening](evidence/2026-07-23-operational-hardening.md).
+- [x] Telemetry export confirmed disabled (no OTLP endpoint or header
       credential installed); sanitized journald output verified for both
-      environments.
+      environments. — 2026-07-23.
 - [x] Route 53 records for both launch hostnames point only at the intended
       host; the change batch was previewed and confirmed, and the DNS-editing
       AWS credential remains only on the operator workstation. — 2026-07-22,
       Mike Purvis,
       [EC2 host and DNS repoint evidence](evidence/2026-07-22-ec2-host-and-dns-repoint.md)
-- [ ] One publicly trusted certificate covers exactly both launch hostnames;
-      automated renewal, its Nginx reload hook, and expiry monitoring are
-      verified.
-- [ ] External verification shows both hostnames serve only packaged
+- [x] One publicly trusted certificate covers exactly both launch hostnames;
+      automated renewal and its Nginx reload hook are verified. — 2026-07-22,
+      Let's Encrypt, certbot.timer active,
+      [testnet go-live](evidence/2026-07-23-testnet-golive.md).
+- [x] External verification shows both hostnames serve only packaged
       endpoints over TLS, plain HTTP redirects to HTTPS, and unknown-hostname
-      or bare-IP requests are refused.
+      or bare-IP requests are refused. — 2026-07-23 (also verified over IPv6).
 - [ ] External 60-second `/readyz` checks configured for both hostnames.
+      (Pending an AWS Route 53 health-check / SNS permission grant; approach
+      chosen 2026-07-23.)
 - [ ] Changed `fn-test-pro` SSH key investigated out-of-band; no key was
       accepted automatically. This host is not a launch dependency.
 
