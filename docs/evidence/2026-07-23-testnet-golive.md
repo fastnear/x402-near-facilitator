@@ -53,10 +53,40 @@ confirming API-key authentication, delegate signature verification, and
 payer attribution before any funds were moved. The invalid result reflects
 `mike.testnet` holding zero USDC prior to funding.
 
-## Remaining testnet acceptance gates
+## Funded acceptance (completed 2026-07-23)
 
-The funded direct transfer, the facilitated return settlement, the receipt
-and balance-delta evidence, and the replay-safety check remain to be
-recorded. Each funded broadcast requires a fresh preview and explicit human
-confirmation. The API key used for validation is scheduled for rotation
-after acceptance.
+Each funded broadcast below was previewed and explicitly confirmed
+immediately before submission. Asset is the configured Circle test USDC
+contract; amounts are 1,000 atomic units.
+
+- Direct transfer `merchant.mike.testnet` → `mike.testnet`, transaction
+  `GjUHrMfYm2UUXaqQaLED1KSuwjKr7P35XCFhkXFQMzkF`. Balance delta exactly
+  +1,000 to the recipient.
+- Post-funding `/verify` returned `isValid: true` with `payer:
+  mike.testnet`.
+- Facilitated settlement `mike.testnet` → `merchant.mike.testnet` through
+  `x402-relayer.mike.testnet`, transaction
+  `FHuswy7QNXc1T1nHHR5jT55f8UML8rNW2iwmDnsrzgdP`. Outer result
+  `SuccessValue`, all four receipts succeeded (the inner NEP-141
+  `ft_transfer` receipt succeeded), sponsorship cost `0.000331` NEAR
+  against a `0.01` NEAR maximum reservation.
+- Fail-closed behavior confirmed: a `/settle` submitted during a transient
+  RPC readiness dip returned HTTP 503 `settlement_unavailable` with no
+  broadcast — the relayer balance and nonce were unchanged — and succeeded
+  on retry once readiness was stable.
+- Replay safety confirmed: after a second funded round trip (funding
+  transaction `9YjGMn37w2UGqqtSwVJyfWsNbhseLRNcR7z18hobcqQV`, settlement
+  `G9d4cNKeYZY5ysfDRXFgEbpN9ABUThHCy5Th9LBSVVPp`), resubmitting the exact
+  same request returned `duplicate_settlement` with an empty transaction and
+  an unchanged relayer balance, proving no second transfer was created.
+
+The validation API key was rotated after acceptance; the prior key is
+revoked and returns 401.
+
+## Readiness backup-RPC note
+
+The readiness dips observed during acceptance trace to the configured
+backup RPC `rpc.testnet.near.org` responding in roughly 3.3–3.8 seconds,
+while the primary `rpc.testnet.fastnear.com` responds in well under one
+second. Adopting a faster testnet backup RPC would reduce readiness
+flapping; the current fail-closed behavior is correct in the meantime.
