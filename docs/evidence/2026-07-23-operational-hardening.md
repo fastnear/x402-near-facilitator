@@ -68,8 +68,27 @@ configured the address via router advertisement, nginx already listens on
 both ports. AAAA records for both hostnames resolve to the instance
 address, and an external IPv6 request to `/readyz` returned 200.
 
-## Pending
+## External monitoring
 
-External `/readyz` monitoring (AWS Route 53 health checks → CloudWatch →
-SNS) and the encrypted off-host S3 backup sync both await an AWS permission
-grant. A second incident contact remains to be recorded.
+Both `/readyz` endpoints are monitored by AWS Route 53 health checks
+(HTTPS, 30-second interval, three-failure threshold) reporting healthy from
+all regional checkers. CloudWatch alarms in `us-east-1`
+(`x402-mainnet-readyz-unhealthy`, `x402-testnet-readyz-unhealthy`) fire to
+an SNS topic on failure and recovery. The email subscription to the
+operator address is created and awaits the one-time confirmation click to
+activate delivery.
+
+## Off-host backup
+
+A private S3 bucket (`x402-near-backups-341982967115`, block-public,
+AES-256 default encryption, versioning, 90-day lifecycle) holds the dumps,
+and the backup script pushes each dump to it when the host has credentials.
+An encrypted EBS snapshot of the root volume provides an immediate off-host
+restore point. The recurring host-to-S3 push is not yet active: it requires
+either an instance IAM role granting `s3:PutObject` to the bucket
+(preferred; no static key on the host) or periodic manual EBS snapshots.
+
+## Deferred
+
+The second incident contact was deliberately deferred. The rollback drill
+remains deferred until a release later than `v0.1.2` exists.
