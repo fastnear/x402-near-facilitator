@@ -482,13 +482,13 @@ jobs:
 
       - name: Attest native archive provenance
         id: native-provenance
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: dist/${{ steps.package.outputs.archive }}
 
       - name: Attest native archive SBOM
         id: native-sbom-attestation
-        uses: actions/attest-sbom@bd218ad0dbcb3e146bd073d1d9c6d78e08aa8a0b # v2.4.0
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: dist/${{ steps.package.outputs.archive }}
           sbom-path: dist/${{ steps.stage.outputs.sbom }}
@@ -526,7 +526,7 @@ jobs:
         run: rm -rf "dist/${{ steps.stage.outputs.directory }}"
 
       - name: Upload native release files
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-files-native
           path: dist/
@@ -727,7 +727,7 @@ jobs:
 
       - name: Attest image provenance
         id: image-provenance
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ${{ needs.preflight.outputs.image }}
           subject-digest: ${{ steps.publish.outputs.digest }}
@@ -735,7 +735,7 @@ jobs:
 
       - name: Attest image SBOM
         id: image-sbom-attestation
-        uses: actions/attest-sbom@bd218ad0dbcb3e146bd073d1d9c6d78e08aa8a0b # v2.4.0
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ needs.preflight.outputs.image }}
           subject-digest: ${{ steps.publish.outputs.digest }}
@@ -773,7 +773,7 @@ jobs:
             --signer-workflow "$SIGNER_WORKFLOW"
 
       - name: Upload OCI release files
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-files-image
           path: dist/
@@ -797,13 +797,13 @@ jobs:
           fetch-depth: 0
 
       - name: Download native release files
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-files-native
           path: dist
 
       - name: Download OCI release files
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-files-image
           path: dist
