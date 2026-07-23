@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use http::HeaderMap;
-use rand::RngCore;
+use rand::TryRng;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
@@ -41,6 +41,8 @@ pub enum AuthError {
     Store(#[source] StoreError),
     #[error("API key authenticator is misconfigured")]
     Configuration,
+    #[error("system entropy source unavailable")]
+    Entropy,
 }
 
 impl ApiKeyAuthenticator {
@@ -99,8 +101,12 @@ impl GeneratedApiKey {
     pub fn generate(environment: Environment, pepper: &[u8]) -> Result<Self, AuthError> {
         let mut public_id = [0_u8; 12];
         let mut secret = Zeroizing::new([0_u8; 32]);
-        rand::rngs::OsRng.fill_bytes(&mut public_id);
-        rand::rngs::OsRng.fill_bytes(secret.as_mut());
+        rand::rngs::SysRng
+            .try_fill_bytes(&mut public_id)
+            .map_err(|_| AuthError::Entropy)?;
+        rand::rngs::SysRng
+            .try_fill_bytes(secret.as_mut())
+            .map_err(|_| AuthError::Entropy)?;
         let prefix = format!(
             "x402_{}_{}",
             environment.api_key_label(),
