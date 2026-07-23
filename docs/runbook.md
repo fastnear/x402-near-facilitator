@@ -587,9 +587,10 @@ transaction and relayer nonce are reconciled.
 
 The rollback target must be a release that actually runs on this host.
 `v0.1.1` does **not**: it predates the systemd credentials-directory fix in
-`v0.1.2` and fails to load credentials on this systemd version, so the only
-viable rollback target is a future release built on `v0.1.2` or later. Verify
-the candidate on the host before relying on it.
+`v0.1.2` and fails to load credentials on this systemd version. `v0.1.2` is
+the earliest viable target and was validated by the 2026-07-23 testnet
+rollback drill (4 s stop-to-ready each way). Verify any other candidate on
+the host before relying on it.
 
 1. Stop the affected systemd instance.
 2. Confirm the preceding release supports the current schema.
