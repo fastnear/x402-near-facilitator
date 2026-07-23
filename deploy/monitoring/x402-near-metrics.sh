@@ -5,8 +5,8 @@
 # colocated with the readyz alarms and the SNS alert topic):
 #   - RelayerBalanceNear{Network=mainnet|testnet}: relayer account balance
 #     in NEAR, read from the same RPC endpoint the service uses.
-#   - CertDaysRemaining{Host=<lineage>}: days until the Let's Encrypt
-#     certificate expires.
+#   - CertDaysRemaining{Host=<lineage>}: days until each Let's Encrypt
+#     certificate lineage expires (one datapoint per lineage).
 #
 # The companion CloudWatch alarms treat missing data as breaching, so a
 # host, timer, or credential failure that stops these pushes raises the
@@ -16,7 +16,7 @@ set -euo pipefail
 readonly REGION=us-east-1
 readonly NAMESPACE=x402near
 readonly CONFIG_DIR=/etc/x402-near-facilitator
-readonly CERT_LINEAGE=/etc/letsencrypt/live/x402.mikedotexe.com/cert.pem
+readonly CERT_LIVE_DIR=/etc/letsencrypt/live
 
 fail=0
 
@@ -55,13 +55,23 @@ for network in mainnet testnet; do
   fi
 done
 
-if end_date=$(openssl x509 -enddate -noout -in "$CERT_LINEAGE" 2>/dev/null); then
-  end_epoch=$(date -d "${end_date#notAfter=}" +%s)
-  days=$(( (end_epoch - $(date +%s)) / 86400 ))
-  publish CertDaysRemaining "Name=Host,Value=x402.mikedotexe.com" "$days"
-  echo "CertDaysRemaining host=x402.mikedotexe.com days=$days"
-else
-  echo "WARN: failed to read certificate expiry" >&2
+found_cert=0
+for cert in "$CERT_LIVE_DIR"/*/cert.pem; do
+  [ -e "$cert" ] || continue
+  found_cert=1
+  host=$(basename "$(dirname "$cert")")
+  if end_date=$(openssl x509 -enddate -noout -in "$cert" 2>/dev/null); then
+    end_epoch=$(date -d "${end_date#notAfter=}" +%s)
+    days=$(( (end_epoch - $(date +%s)) / 86400 ))
+    publish CertDaysRemaining "Name=Host,Value=$host" "$days"
+    echo "CertDaysRemaining host=$host days=$days"
+  else
+    echo "WARN: failed to read certificate expiry for $host" >&2
+    fail=1
+  fi
+done
+if [ "$found_cert" -eq 0 ]; then
+  echo "WARN: no certificate lineages found under $CERT_LIVE_DIR" >&2
   fail=1
 fi
 

@@ -12,7 +12,7 @@ topic `arn:aws:sns:us-east-1:341982967115:x402-facilitator-alerts`.
 
 | Asset | Installed at | Purpose |
 | --- | --- | --- |
-| `x402-near-metrics.sh` | `/usr/local/bin/` | Push relayer balances + cert expiry every 5 minutes |
+| `x402-near-metrics.sh` | `/usr/local/bin/` | Push relayer balances + per-lineage cert expiry every 5 minutes |
 | `x402-near-metrics.{service,timer}` | `/etc/systemd/system/` | Drive the metrics push |
 | `x402-near-backup.sh` | `/usr/local/bin/` | Nightly dumps, S3 push, `BackupSuccess` signal |
 | `x402-near-backup.{service,timer}` | `/etc/systemd/system/` | Drive the nightly backup |
@@ -69,6 +69,10 @@ itself.
 | `x402-mainnet-relayer-balance-low` | `RelayerBalanceNear{Network=mainnet}` | `< 2` NEAR | 3 × 5 min |
 | `x402-testnet-relayer-balance-low` | `RelayerBalanceNear{Network=testnet}` | `< 3` NEAR | 3 × 5 min |
 | `x402-cert-expiry-soon` | `CertDaysRemaining{Host=x402.mikedotexe.com}` | `< 21` days | 3 × 5 min |
+
+The metrics script emits one `CertDaysRemaining` datapoint per Let's
+Encrypt lineage; when a new lineage is issued (for example a demo
+workload's hostnames), create a matching alarm on its `Host` dimension.
 | `x402-backup-missing` | `BackupSuccess` (Sum, 1-day period) | `< 1` | 1 × 1 day |
 
 The balance thresholds sit above the configured service warning thresholds,
