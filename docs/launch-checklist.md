@@ -130,11 +130,17 @@ or conversation alone is not launch evidence.
       field changes.
 - [x] `x402-relayer.mike.testnet` exists with dedicated service and separate
       recovery keys and exactly 10 testnet NEAR initial funding. — 2026-07-19,
-      Mike Purvis / FastNEAR,
-      [relayer provisioning evidence](evidence/2026-07-19-relayer-provisioning.md)
-- [ ] Testnet config, Circle contract, RPC identity, exact merchant policy,
-      budget, relayer key, and balance pass readiness.
-- [ ] Public testnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass.
+      Mike Purvis,
+      [relayer provisioning evidence](evidence/2026-07-19-relayer-provisioning.md).
+      Service key rotated 2026-07-22 to `ed25519:C577dij...` after the
+      original was lost; account now holds exactly the recovery and new
+      service keys.
+- [x] Testnet config, Circle contract, RPC identity, exact merchant policy,
+      budget, relayer key, and balance pass readiness. — 2026-07-23,
+      Mike Purvis, [testnet go-live evidence](evidence/2026-07-23-testnet-golive.md)
+- [x] Public testnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass. —
+      2026-07-23, Mike Purvis,
+      [testnet go-live evidence](evidence/2026-07-23-testnet-golive.md)
 - [ ] Immediately before the direct transfer, a human confirms
       `near:testnet`; the exact configured Circle test-USDC contract; 1,000
       atomic units; `merchant.mike.testnet`; `mike.testnet`; no relayer; and
