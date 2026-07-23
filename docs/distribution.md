@@ -21,8 +21,15 @@ separately.
 ### 1. x402scan — resource registration (web form, no PR)
 
 - Submit at <https://www.x402scan.com/resources/register>.
-- URL to submit: `https://x402-demo.mikedotexe.com/work` — the indexer
-  validates the live 402 schema and lists automatically.
+- URL to submit: `https://x402-demo.mikedotexe.com/work`.
+- Per their discovery spec (`Merit-Systems/x402scan`
+  `docs/DISCOVERY.md`, OpenAPI-first), both demo hostnames serve
+  `/openapi.json` declaring the paid `POST /work` operation with
+  `x-payment-info` (protocol `x402`, fixed `$0.001`), a `402` response,
+  and the request-body input schema, plus `/.well-known/x402` for
+  compatibility fan-out (sources in `deploy/demo/discovery/`). Runtime
+  402 behavior remains authoritative and was validated by the live paid
+  flows.
 - Optionally also register the testnet resource URL if the form accepts
   non-mainnet resources.
 

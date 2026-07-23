@@ -46,6 +46,13 @@ facilitator's own settlement idempotency is unaffected.
    `systemctl enable --now x402-demo@testnet x402-demo@mainnet`.
 8. **Nginx**: install `x402-demo.conf` to `/etc/nginx/sites-available/`,
    symlink into `sites-enabled/`, `nginx -t`, reload.
+9. **Discovery documents** (x402scan OpenAPI-first spec): install the
+   files from `discovery/` to `/var/www/x402-demo/<env>/openapi.json`
+   and `/var/www/x402-demo/<env>/well-known-x402.json` (root-owned
+   0644). Nginx serves them at `/openapi.json` and `/.well-known/x402`
+   on each demo hostname; each paid operation declares
+   `x-payment-info` (protocol + fixed USD price), a `402` response, and
+   the request-body input schema agents need.
 
 ## Verification
 
