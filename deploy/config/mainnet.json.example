@@ -3,7 +3,7 @@
   "network": "near:mainnet",
   "bind_address": "127.0.0.1:8402",
   "primary_rpc_url": "https://rpc.mainnet.fastnear.com",
-  "backup_rpc_url": "https://rpc.mainnet.near.org",
+  "backup_rpc_url": "https://archival-rpc.mainnet.fastnear.com",
   "asset": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
   "asset_symbol": "USDC",
   "minimum_amount": "1000",

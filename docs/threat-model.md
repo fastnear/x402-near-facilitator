@@ -14,7 +14,7 @@ The facilitator protects:
 - truthful settlement responses and operational telemetry.
 
 The process trusts its checked-in policy logic, environment-specific config,
-PostgreSQL, dedicated relayer credential, and two independently operated RPC
+PostgreSQL, dedicated relayer credential, and its primary and backup RPC
 endpoints. It does not trust callers, signed-payload fields before signature
 verification, arbitrary RPC error text, forwarded client IP headers, or outer
 transaction success by itself.
@@ -75,6 +75,12 @@ quarantines the relayer. No recovery path signs replacement bytes.
   Valid verification can still fail at settlement if state changes.
 - PostgreSQL and RPC availability are launch dependencies. Failing closed
   protects funds but reduces availability.
+- The primary and backup RPC endpoints are both operated by FastNEAR (the
+  regular and archival hosts). This gives infrastructure separation for the
+  dual-RPC finality and reconciliation checks but not operator independence,
+  so a FastNEAR-wide fault or compromise could affect both. Adopting a
+  genuinely independent second provider would restore operator-level
+  independence; revisit this if reconciliation trust assumptions change.
 - A compromised full-access relayer key can spend the relayer's NEAR balance.
   The deliberately small balance, daily caps, alerts, and recovery key limit
   but do not eliminate this risk.
