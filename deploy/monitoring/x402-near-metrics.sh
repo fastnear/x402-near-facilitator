@@ -21,6 +21,8 @@ readonly CERT_LIVE_DIR=/etc/letsencrypt/live
 fail=0
 
 publish() {
+  # put-metric-data takes shorthand key=value dimensions (e.g.
+  # "Network=mainnet"), unlike put-metric-alarm's Name=/Value= structure.
   local metric=$1 dimensions=$2 value=$3
   aws cloudwatch put-metric-data \
     --region "$REGION" \
@@ -47,7 +49,7 @@ relayer_balance_near() {
 for network in mainnet testnet; do
   config="$CONFIG_DIR/$network.json"
   if balance=$(relayer_balance_near "$config"); then
-    publish RelayerBalanceNear "Name=Network,Value=$network" "$balance"
+    publish RelayerBalanceNear "Network=$network" "$balance"
     echo "RelayerBalanceNear network=$network balance=$balance"
   else
     echo "WARN: failed to read relayer balance for $network" >&2
@@ -63,7 +65,7 @@ for cert in "$CERT_LIVE_DIR"/*/cert.pem; do
   if end_date=$(openssl x509 -enddate -noout -in "$cert" 2>/dev/null); then
     end_epoch=$(date -d "${end_date#notAfter=}" +%s)
     days=$(( (end_epoch - $(date +%s)) / 86400 ))
-    publish CertDaysRemaining "Name=Host,Value=$host" "$days"
+    publish CertDaysRemaining "Host=$host" "$days"
     echo "CertDaysRemaining host=$host days=$days"
   else
     echo "WARN: failed to read certificate expiry for $host" >&2
