@@ -517,7 +517,7 @@ mod tests {
             bind_address: SocketAddr::from(([127, 0, 0, 1], 8402)),
             primary_rpc_url: Url::parse("https://rpc.mainnet.fastnear.com")
                 .unwrap_or_else(|_| std::process::abort()),
-            backup_rpc_url: Url::parse("https://rpc.mainnet.near.org")
+            backup_rpc_url: Url::parse("https://archival-rpc.mainnet.fastnear.com")
                 .unwrap_or_else(|_| std::process::abort()),
             asset: "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1".to_owned(),
             asset_symbol: "USDC".to_owned(),
