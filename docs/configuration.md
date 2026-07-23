@@ -44,7 +44,7 @@ cross-network mistake:
 | --- | --- | --- |
 | Network | `near:testnet` | `near:mainnet` |
 | Bind address | `127.0.0.1:8403` | `127.0.0.1:8402` |
-| Relayer | `x402-relayer.mike.testnet` | `x402-relayer.mike.near` |
+| Relayer | `x402-relayer.mike.testnet` | `x402-relayer2.mike.near` |
 | Primary RPC | `rpc.testnet.fastnear.com` | `rpc.mainnet.fastnear.com` |
 | Backup RPC | `archival-rpc.testnet.fastnear.com` | `archival-rpc.mainnet.fastnear.com` |
 | Global daily cap | 2 NEAR | 0.50 NEAR |
