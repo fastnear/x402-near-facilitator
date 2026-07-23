@@ -221,22 +221,31 @@ or conversation alone is not launch evidence.
       0.000334 NEAR ([evidence](evidence/2026-07-23-mainnet-golive.md))
 - [x] Mainnet replay proves one transfer and stable terminal response. —
       2026-07-23, `duplicate_settlement`, unchanged relayer balance.
-- [ ] Recovery, rollback, API-key revocation, and operator escalation drills
-      pass. (Rollback drill passed on the shared host mechanism
+- [x] Recovery, rollback, API-key revocation, and operator escalation drills
+      pass. — Rollback drill 2026-07-23
       ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md));
-      API-key revocation drill passed
-      ([evidence](evidence/2026-07-23-operational-hardening.md)); the
-      indeterminate-settlement recovery drill is still to run; operator
-      escalation is accepted-solo.)
+      API-key revocation drill
+      ([evidence](evidence/2026-07-23-operational-hardening.md));
+      indeterminate-settlement recovery drill 2026-07-23, including a true
+      broadcast-then-crash recovery with no rebroadcast
+      ([evidence](evidence/2026-07-23-real-traffic-and-recovery.md));
+      operator escalation is the documented solo self-escalation path
+      (second contact deliberately deferred, accepted risk).
 - [x] Mainnet service is enabled at boot after owner go/no-go review. —
       2026-07-23, after funded acceptance.
 
 ## Distribution evidence
 
-- [ ] Public README, API documentation, threat model, runbook, and example
-      resource workload match the deployed release.
-- [ ] A real reference workload settles repeatedly and measurable activity is
-      recorded without customer-identifying data.
+- [x] Public README, API documentation, threat model, runbook, and example
+      resource workload match the deployed release. — 2026-07-23: both
+      environments run v0.1.3; the public demo workload runs the example
+      from the v0.1.3 source tag; docs changed since the tag are evidence
+      and checklist records only.
+- [x] A real reference workload settles repeatedly and measurable activity is
+      recorded without customer-identifying data. — 2026-07-23, three
+      public testnet settles and two mainnet settles with replay and
+      conflict proofs
+      ([evidence](evidence/2026-07-23-real-traffic-and-recovery.md))
 - [ ] Repository, endpoints, release, owner, transaction evidence, current
       phase, and remaining work are added to the NEAR integrations coordination
       hub on a separate clean branch.
