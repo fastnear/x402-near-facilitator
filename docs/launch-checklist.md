@@ -123,7 +123,9 @@ or conversation alone is not launch evidence.
       durable settlement identities are never recycled, and sanitized
       journald plus dedicated Nginx retention is verified at no more than
       14 days.
-- [ ] Binary rollback drill succeeds without a schema rollback.
+- [x] Binary rollback drill succeeds without a schema rollback. —
+      2026-07-23, testnet v0.1.3→v0.1.2→v0.1.3, 4 s stop-to-ready each way
+      ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md))
 
 ## Testnet launch
 
@@ -173,8 +175,12 @@ or conversation alone is not launch evidence.
       2026-07-23, `duplicate_settlement` with unchanged relayer balance
       ([evidence](evidence/2026-07-23-testnet-golive.md))
 - [ ] Restart, RPC failover, low-balance, and external-monitor alert drills
-      pass. (Fail-closed-on-RPC-lag observed during acceptance; explicit
-      restart, low-balance, and monitor drills still to run.)
+      pass. (Restart and low-balance drills passed
+      ([evidence](evidence/2026-07-23-operational-hardening.md)); alert
+      delivery proven for every alarm plus the OnFailure path
+      ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md));
+      an explicit RPC-failover drill still to run — fail-closed-on-RPC-lag
+      was observed during acceptance.)
 - [x] Testnet service is enabled at boot. (Enabled 2026-07-23 after funded
       acceptance; the restart/low-balance/monitor drills above remain open.)
 
@@ -216,8 +222,12 @@ or conversation alone is not launch evidence.
 - [x] Mainnet replay proves one transfer and stable terminal response. —
       2026-07-23, `duplicate_settlement`, unchanged relayer balance.
 - [ ] Recovery, rollback, API-key revocation, and operator escalation drills
-      pass. (Idempotent replay and fail-closed-on-RPC-lag observed; explicit
-      recovery/rollback/revocation drills still to run.)
+      pass. (Rollback drill passed on the shared host mechanism
+      ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md));
+      API-key revocation drill passed
+      ([evidence](evidence/2026-07-23-operational-hardening.md)); the
+      indeterminate-settlement recovery drill is still to run; operator
+      escalation is accepted-solo.)
 - [x] Mainnet service is enabled at boot after owner go/no-go review. —
       2026-07-23, after funded acceptance.
 
