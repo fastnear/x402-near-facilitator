@@ -1,0 +1,13 @@
+[Unit]
+Description=x402-near failure alert for %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/x402-near-alert.sh %i
+# The AWS CLI needs a writable HOME for its cache; keep it in the
+# unit-private /tmp so the sandbox stays read-only elsewhere.
+Environment=HOME=/tmp
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
