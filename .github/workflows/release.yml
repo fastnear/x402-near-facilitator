@@ -33,7 +33,7 @@ jobs:
       version: ${{ steps.source.outputs.version }}
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0
 
@@ -209,7 +209,7 @@ jobs:
       X402_RUN_NODE_CLIENT_CONFORMANCE: "1"
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Install pinned Rust toolchain
         run: rustup show
@@ -309,7 +309,7 @@ jobs:
       contents: read
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Install pinned fuzz toolchain
         run: |
@@ -357,7 +357,7 @@ jobs:
       sbom: ${{ steps.stage.outputs.sbom }}
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Install pinned Rust toolchain
         run: rustup show
@@ -548,7 +548,7 @@ jobs:
       digest: ${{ steps.publish.outputs.digest }}
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -792,7 +792,7 @@ jobs:
       packages: write
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0
 
