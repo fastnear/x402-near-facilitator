@@ -179,7 +179,10 @@ sudo certbot certonly --webroot -w /var/www/x402-near-acme \
 
 Remove the bootstrap server after issuance; the packaged port-80 virtual
 hosts keep serving the ACME webroot for unattended renewals. Verify the
-certbot renewal timer is active and expiry monitoring exists. DNS-01 through
+certbot renewal timer is active; a failed renewal run raises an SNS alert
+through the `certbot.service` `OnFailure=` drop-in, and certificate expiry
+is tracked by the `CertDaysRemaining` metric and its 21-day alarm (see
+`deploy/monitoring/README.md`). DNS-01 through
 the certbot Route 53 plugin is acceptable only with a separate IAM
 credential restricted to the two `_acme-challenge` TXT names; the broad
 zone credential never belongs on the host.
@@ -443,9 +446,15 @@ sudo systemctl enable x402-near-facilitator@mainnet
 
 ## Routine checks
 
-- Public `/readyz` is checked every 60 seconds by the external monitor,
-  which is the only automated alerting at launch.
-- Review daily sponsorship use and relayer balance; refills are manual.
+- Public `/readyz` is checked continuously by the external Route 53
+  monitor. The host additionally pushes relayer balances, certificate
+  expiry, and a nightly backup-success signal to CloudWatch every five
+  minutes, with alarms that treat missing data as breaching and unit
+  `OnFailure=` hooks that publish to the SNS alert topic (see
+  `deploy/monitoring/README.md` for assets, thresholds, and the
+  failure-path coverage map).
+- Review daily sponsorship use; relayer refills are manual, prompted by
+  the low-balance alarm before the service's own warning threshold.
 - Review API clients, exact payee policy, and owner contacts monthly.
 - The `x402-near-backup.timer` systemd timer dumps both databases nightly to
   `/var/backups/x402-near/` (root-only, 14-day retention). Confirm the timer

@@ -1,0 +1,8 @@
+[Unit]
+Description=x402-near nightly PostgreSQL dump
+After=postgresql.service
+OnFailure=x402-near-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/x402-near-backup.sh
