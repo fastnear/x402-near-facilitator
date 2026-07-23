@@ -34,9 +34,10 @@ or conversation alone is not launch evidence.
 - [x] External verification shows both hostnames serve only packaged
       endpoints over TLS, plain HTTP redirects to HTTPS, and unknown-hostname
       or bare-IP requests are refused. — 2026-07-23 (also verified over IPv6).
-- [ ] External 60-second `/readyz` checks configured for both hostnames.
-      (Pending an AWS Route 53 health-check / SNS permission grant; approach
-      chosen 2026-07-23.)
+- [x] External `/readyz` checks configured for both hostnames. — 2026-07-23,
+      AWS Route 53 health checks (30-second interval) with CloudWatch alarms
+      to SNS, [operational hardening](evidence/2026-07-23-operational-hardening.md).
+      The alert email subscription awaits its one-time confirmation click.
 - [ ] Changed `fn-test-pro` SSH key investigated out-of-band; no key was
       accepted automatically. This host is not a launch dependency.
 
