@@ -12,8 +12,10 @@
 use std::fmt;
 
 use x402_chain_near::{
-    NearChainProvider, PreparedTransaction as NearPrepared, VerifiedPayment as NearVerified,
+    NearChainProvider, NearRpcError, PreparedTransaction as NearPrepared,
+    VerifiedPayment as NearVerified,
 };
+use x402_types::chain::ChainProviderOps as _;
 
 /// The settlement provider for the environment's chain. A closed enum (rather
 /// than `dyn`) so the engine can hold one `Arc<ChainProvider>` and dispatch
@@ -36,6 +38,60 @@ impl ChainProvider {
     pub fn as_near(&self) -> &NearChainProvider {
         let Self::Near(provider) = self;
         provider
+    }
+
+    /// The facilitator signer/relayer account identity (NEAR account id / EVM
+    /// `0x` address).
+    #[must_use]
+    pub fn signer_account_id(&self) -> String {
+        match self {
+            Self::Near(provider) => provider.relayer_account_id().to_string(),
+        }
+    }
+
+    /// The facilitator signer/relayer public key (NEAR ed25519 string; EVM
+    /// address, or empty).
+    #[must_use]
+    pub fn signer_public_key(&self) -> String {
+        match self {
+            Self::Near(provider) => provider.relayer_public_key().to_string(),
+        }
+    }
+
+    /// Probe that both configured RPC endpoints report the expected chain and a
+    /// final block. This is the chain-liveness half of readiness.
+    pub async fn readiness_probe(&self) -> bool {
+        match self {
+            Self::Near(provider) => {
+                let expected = provider.chain_id().reference;
+                matches!(provider.rpc_network_id().await, Ok(network) if network == expected)
+                    && matches!(
+                        provider.backup_rpc_network_id().await,
+                        Ok(network) if network == expected
+                    )
+                    && provider.rpc_final_block().await.is_ok()
+                    && provider.backup_rpc_final_block().await.is_ok()
+            }
+        }
+    }
+
+    /// A fresh snapshot of the signer and chain head, used to gate readiness and
+    /// prepare a submission. For NEAR this also enforces that the relayer key is
+    /// full-access (the underlying `relayer_status` errors otherwise).
+    pub async fn signer_head(&self) -> Result<SignerHead, NearRpcError> {
+        match self {
+            Self::Near(provider) => {
+                let status = provider.relayer_status().await?;
+                Ok(SignerHead {
+                    chain_block_height: status.block_height,
+                    chain_block_ref: status.block_hash.to_string(),
+                    signer_nonce: u128::from(status.access_key_nonce),
+                    signer_id: provider.relayer_account_id().to_string(),
+                    signer_public_key: provider.relayer_public_key().to_string(),
+                    signer_balance_atomic: status.account.amount.as_yoctonear(),
+                })
+            }
+        }
     }
 }
 
@@ -102,6 +158,8 @@ pub struct SignerHead {
     pub signer_nonce: u128,
     /// Signer identity: NEAR relayer account id / EVM signer `0x` address.
     pub signer_id: String,
+    /// Signer public key (NEAR ed25519) / empty for EVM (address is `signer_id`).
+    pub signer_public_key: String,
     /// Signer's native-gas balance in atomic units (yoctoNEAR / wei).
     pub signer_balance_atomic: u128,
 }

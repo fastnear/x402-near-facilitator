@@ -123,46 +123,30 @@ impl AppState {
     /// relayer key must be `FullAccess`, active in policy, and funded above the
     /// hard-stop threshold.
     pub async fn refresh_chain_readiness(&self) -> bool {
-        let expected_chain_id = match self.config.environment {
-            crate::config::Environment::Mainnet => "mainnet",
-            crate::config::Environment::Testnet => "testnet",
-        };
-        let rpc_ready = matches!(
-            self.provider.as_near().rpc_network_id().await,
-            Ok(network) if network == expected_chain_id
-        ) && matches!(
-            self.provider.as_near().backup_rpc_network_id().await,
-            Ok(network) if network == expected_chain_id
-        ) && self.provider.as_near().rpc_final_block().await.is_ok()
-            && self.provider.as_near().backup_rpc_final_block().await.is_ok();
+        let rpc_ready = self.provider.readiness_probe().await;
         self.readiness.set_rpc(rpc_ready);
 
-        let relayer_status = self.provider.as_near().relayer_status().await;
+        let signer = self.provider.signer_head().await;
         let policy_active = self
             .store
             .relayer_is_active(
                 &self.config.network,
                 &self.config.relayer_account_id,
-                &self.provider.as_near().relayer_public_key().to_string(),
+                &self.provider.signer_public_key(),
             )
             .await
             .unwrap_or(false);
-        if let Ok(status) = &relayer_status
-            && let Ok(balance_yocto_near) = status
-                .account
-                .amount
-                .as_yoctonear()
-                .to_string()
-                .parse::<f64>()
+        if let Ok(head) = &signer
+            && let Ok(balance_yocto_near) = head.signer_balance_atomic.to_string().parse::<f64>()
         {
             self.metrics.record_relayer(
                 balance_yocto_near / 1_000_000_000_000_000_000_000_000_f64,
                 !policy_active,
             );
         }
-        let relayer_ready = relayer_status.is_ok_and(|status| {
+        let relayer_ready = signer.is_ok_and(|head| {
             decimal_is_at_least(
-                &status.account.amount.as_yoctonear().to_string(),
+                &head.signer_balance_atomic.to_string(),
                 &self.config.sponsorship.balance_hard_stop_yocto_near,
             )
         }) && policy_active;
