@@ -69,7 +69,9 @@ for this service and are not changed by anything here.
   extraction plan (journal, fail-closed verify helpers, deploy
   templates), key/custody model (facilitator submits `execute_intents`
   from its own funded account; it never holds payer funds), and
-  monitoring/alerting parity with this service's standard.
+  monitoring/alerting parity with this service's standard. *Draft started
+  2026-07-24: [near-intents-sibling-design.md](near-intents-sibling-design.md)
+  (finalizes against merged spec text after G1).*
 - [ ] **G5 — Operational parity.** The sibling passes the same classes
   of drills this service passed before its go-live (promote, rollback,
   recovery, alerting delivery), adapted to mainnet-dust scale.
