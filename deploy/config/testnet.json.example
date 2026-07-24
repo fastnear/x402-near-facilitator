@@ -1,5 +1,6 @@
 {
   "environment": "testnet",
+  "chain_kind": "near",
   "network": "near:testnet",
   "bind_address": "127.0.0.1:8403",
   "primary_rpc_url": "https://rpc.testnet.fastnear.com",

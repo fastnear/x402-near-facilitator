@@ -46,16 +46,37 @@ relayer_balance_near() {
   awk -v y="$amount" 'BEGIN { printf "%.6f", y / 1e24 }'
 }
 
-for network in mainnet testnet; do
-  config="$CONFIG_DIR/$network.json"
-  if balance=$(relayer_balance_near "$config"); then
-    publish RelayerBalanceNear "Network=$network" "$balance"
-    echo "RelayerBalanceNear network=$network balance=$balance"
-  else
-    echo "WARN: failed to read relayer balance for $network" >&2
-    fail=1
-  fi
+# Iterate the installed instance configs rather than a fixed mainnet/testnet
+# list, so a new instance is covered as soon as its config lands. The balance
+# metric is chain-specific: NEAR instances publish RelayerBalanceNear; the EVM
+# (eip155) signer-balance metric arrives with that provider.
+found_config=0
+for config in "$CONFIG_DIR"/*.json; do
+  [ -e "$config" ] || continue
+  found_config=1
+  network=$(basename "$config" .json)
+  chain_kind=$(jq -r '.chain_kind // "near"' "$config")
+  case "$chain_kind" in
+    near)
+      if balance=$(relayer_balance_near "$config"); then
+        publish RelayerBalanceNear "Network=$network" "$balance"
+        echo "RelayerBalanceNear network=$network balance=$balance"
+      else
+        echo "WARN: failed to read relayer balance for $network" >&2
+        fail=1
+      fi
+      ;;
+    *)
+      # No NEAR-shaped balance metric for other chains; the eip155 signer
+      # balance (SignerBalanceEth) is added with the EVM provider.
+      echo "WARN: no balance metric for chain_kind=$chain_kind ($network); skipping" >&2
+      ;;
+  esac
 done
+if [ "$found_config" -eq 0 ]; then
+  echo "WARN: no instance configs found under $CONFIG_DIR" >&2
+  fail=1
+fi
 
 found_cert=0
 for cert in "$CERT_LIVE_DIR"/*/cert.pem; do

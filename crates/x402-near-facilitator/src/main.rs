@@ -12,7 +12,9 @@ use x402_chain_near::{JsonRpcNearRpc, NearChainProvider, NearNetwork, NearRpc, V
 use x402_facilitator_local::{FacilitatorLocal, util::SigDown};
 use x402_near_facilitator::auth::ApiKeyAuthenticator;
 use x402_near_facilitator::chain::ChainProvider;
-use x402_near_facilitator::config::{Environment, OtelConfig, SecretFiles, ServiceConfig};
+use x402_near_facilitator::config::{
+    ChainKind, Environment, OtelConfig, SecretFiles, ServiceConfig,
+};
 use x402_near_facilitator::leadership::{LeadershipHandle, ReadinessState};
 use x402_near_facilitator::service::{AppState, reconcile, router};
 use x402_near_facilitator::store::PgStore;
@@ -66,6 +68,14 @@ async fn main() -> Result<()> {
     )
     .context("initialize API authentication")?;
 
+    // The settlement provider and relayer-key algorithm are chain-specific; only
+    // NEAR (ed25519) is wired today. `validate()` already rejects an eip155
+    // config at load; this guards the NEAR construction below and marks where the
+    // eip155 (secp256k1 + EVM provider) branch slots in.
+    ensure!(
+        config.chain_kind == ChainKind::Near,
+        "eip155 (EVM) settlement is not yet available in this build"
+    );
     let relayer_account =
         AccountId::from_str(&config.relayer_account_id).context("parse relayer account")?;
     let secret_key =

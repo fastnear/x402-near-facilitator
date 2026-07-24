@@ -37,7 +37,8 @@ use super::{AppState, reconcile, run_new_settlement};
 use crate::auth::ApiKeyAuthenticator;
 use crate::chain::ChainProvider;
 use crate::config::{
-    Environment, PaymentIdentifierConfig, RequestLimits, ServiceConfig, SponsorshipConfig,
+    ChainKind, Environment, PaymentIdentifierConfig, RequestLimits, ServiceConfig,
+    SponsorshipConfig,
 };
 use crate::leadership::ReadinessState;
 use crate::protocol::{ParsedRequest, parse_request, request_fingerprint};
@@ -478,6 +479,7 @@ fn restarted_state(database: &TestDatabase, context: &TestContext) -> TestResult
 fn service_config() -> TestResult<ServiceConfig> {
     Ok(ServiceConfig {
         environment: Environment::Testnet,
+        chain_kind: ChainKind::Near,
         network: "near:testnet".to_owned(),
         bind_address: "127.0.0.1:0".parse()?,
         primary_rpc_url: Url::parse("https://primary.recovery.invalid")?,
