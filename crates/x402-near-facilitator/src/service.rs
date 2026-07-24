@@ -34,10 +34,9 @@ use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Instrument as _;
 use uuid::Uuid;
 use x402_chain_near::{
-    NearChainProvider, NearRpcError, RelayerHead, RelayerStatus, TransactionLookup,
-    VerificationFailure, VerificationPolicy, VerifiedPayment, decode_signed_delegate,
-    decode_signed_transaction, interpret_final_outcome, signed_delegate_hash,
-    signed_transaction_hash, validate_final_outcome_identity,
+    NearChainProvider, NearRpcError, RelayerStatus, TransactionLookup, VerificationFailure,
+    VerificationPolicy, decode_signed_delegate, decode_signed_transaction, interpret_final_outcome,
+    signed_delegate_hash, signed_transaction_hash, validate_final_outcome_identity,
 };
 use x402_facilitator_local::FacilitatorLocal;
 use x402_types::facilitator::Facilitator;
@@ -45,7 +44,9 @@ use x402_types::scheme::SchemeRegistry;
 
 use crate::VERSION;
 use crate::auth::{ApiKeyAuthenticator, AuthError, AuthenticatedClient};
-use crate::chain::ChainProvider;
+use crate::chain::{
+    BroadcastOutcome, ChainProvider, SignerHead, TerminalOutcome, VerifiedDetail, VerifiedPayment,
+};
 use crate::config::ServiceConfig;
 use crate::leadership::ReadinessState;
 use crate::protocol::{
@@ -678,9 +679,9 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
     let policy = VerificationPolicy {
         max_sponsored_gas: state.config.max_inner_gas,
     };
-    let verified = match state.provider.as_near().verify(&parsed.raw, &policy).await {
+    let verified = match state.provider.verify(&parsed.raw, &policy).await {
         Ok(verified) => verified,
-        Err(failure) if verification_is_rpc_ambiguous(failure) => {
+        Err(rejection) if rejection.rpc_ambiguous => {
             if let Some(response) = prior_settlement_race_response(
                 state,
                 client.id,
@@ -698,7 +699,7 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
             )
             .into_response();
         }
-        Err(failure) => {
+        Err(rejection) => {
             if let Some(response) = prior_settlement_race_response(
                 state,
                 client.id,
@@ -713,7 +714,7 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
             return protocol_json(
                 StatusCode::OK,
                 &SettleResponse::failure(
-                    failure.reason(),
+                    rejection.reason,
                     None,
                     None,
                     String::new(),
@@ -722,7 +723,10 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
             );
         }
     };
-    if verified.payment_hash() != &decoded.payment_hash {
+    // The neutral verified payment drives the journal; the NEAR reservation row
+    // still records delegate identity fields (generalized at migration 0002).
+    let VerifiedDetail::Near(near_verified) = &verified.detail;
+    if verified.payment_hash != decoded.payment_hash {
         return ApiError::unavailable(
             "verification_inconsistent",
             "payment verification was internally inconsistent",
@@ -733,7 +737,7 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
         id: Uuid::new_v4(),
         api_client_id: client.id,
         payment_identifier: parsed.meta.payment_identifier.clone(),
-        payment_hash: *verified.payment_hash(),
+        payment_hash: verified.payment_hash,
         request_fingerprint: fingerprint,
         x402_version: parsed.meta.x402_version,
         scheme: parsed.meta.scheme.clone(),
@@ -741,10 +745,10 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
         asset: parsed.meta.asset.clone(),
         pay_to: parsed.meta.pay_to.clone(),
         amount: parsed.meta.amount.clone(),
-        payer: verified.payer.to_string(),
-        delegate_public_key: verified.payer_public_key.to_string(),
-        delegate_nonce: verified.delegate_nonce.to_string(),
-        delegate_max_block_height: verified.max_block_height.to_string(),
+        payer: verified.payer.clone(),
+        delegate_public_key: near_verified.payer_public_key.to_string(),
+        delegate_nonce: near_verified.delegate_nonce.to_string(),
+        delegate_max_block_height: near_verified.max_block_height.to_string(),
         policy_snapshot: state.config.policy_snapshot(),
         reservation_yocto_near: state.config.sponsorship.reservation_yocto_near.clone(),
         global_daily_budget_yocto_near: state.config.sponsorship.global_daily_yocto_near.clone(),
@@ -1056,18 +1060,6 @@ fn response_is_rpc_ambiguous(value: &Value) -> bool {
         })
 }
 
-const fn verification_is_rpc_ambiguous(failure: VerificationFailure) -> bool {
-    matches!(
-        failure,
-        VerificationFailure::CurrentBlockHeightUnavailable
-            | VerificationFailure::AccessKeyLookupFailed
-            | VerificationFailure::AccountLookupFailed
-            | VerificationFailure::TokenAccountLookupFailed
-            | VerificationFailure::BalanceCheckFailed
-            | VerificationFailure::StorageCheckFailed
-    )
-}
-
 fn protocol_json<T: Serialize>(status: StatusCode, body: &T) -> Response {
     match serde_json::to_vec(body) {
         Ok(bytes) => raw_json(status, bytes),
@@ -1145,9 +1137,9 @@ async fn run_new_settlement(
     let policy = VerificationPolicy {
         max_sponsored_gas: state.config.max_inner_gas,
     };
-    let payment = match state.provider.as_near().verify(&request, &policy).await {
+    let payment = match state.provider.verify(&request, &policy).await {
         Ok(payment) => payment,
-        Err(failure) if verification_is_rpc_ambiguous(failure) => {
+        Err(rejection) if rejection.rpc_ambiguous => {
             terminal_service_failure(
                 &state,
                 settlement_id,
@@ -1157,12 +1149,12 @@ async fn run_new_settlement(
             .await;
             return;
         }
-        Err(failure) => {
-            terminal_protocol_failure(&state, settlement_id, failure.reason(), None, None).await;
+        Err(rejection) => {
+            terminal_protocol_failure(&state, settlement_id, rejection.reason, None, None).await;
             return;
         }
     };
-    let Ok(relayer_status) = fresh_relayer_status(&state).await else {
+    let Ok(signer_head) = fresh_signer_head(&state).await else {
         terminal_service_failure(
             &state,
             settlement_id,
@@ -1172,15 +1164,7 @@ async fn run_new_settlement(
         .await;
         return;
     };
-    let relayer_head = RelayerHead {
-        block_height: relayer_status.block_height,
-        block_hash: relayer_status.block_hash,
-        access_key_nonce: relayer_status.access_key_nonce,
-    };
-    let Ok(prepared) = state
-        .provider
-        .as_near().prepare_outer_transaction(&payment, relayer_head)
-    else {
+    let Ok(prepared) = state.provider.prepare(&payment, &signer_head) else {
         terminal_service_failure(
             &state,
             settlement_id,
@@ -1192,11 +1176,11 @@ async fn run_new_settlement(
     };
     let journal = PreparedJournalEntry {
         settlement_id,
-        relayer_account_id: prepared.signer_id.to_string(),
-        relayer_public_key: prepared.signer_public_key.to_string(),
-        relayer_nonce: prepared.relayer_nonce.to_string(),
-        transaction_bytes: prepared.signed_transaction_bytes().to_vec(),
-        transaction_hash: prepared.transaction_hash.to_string(),
+        relayer_account_id: prepared.signer_id.clone(),
+        relayer_public_key: prepared.signer_public_key.clone(),
+        relayer_nonce: prepared.signer_nonce.to_string(),
+        transaction_bytes: prepared.submit_bytes.clone(),
+        transaction_hash: prepared.submit_hash.clone(),
     };
     if state.store.mark_prepared(&journal).await.is_err() {
         state.readiness.set_reconciliation(false);
@@ -1204,13 +1188,13 @@ async fn run_new_settlement(
         return;
     }
 
-    let Ok(current_relayer) = fresh_relayer_status(&state).await else {
+    let Ok(current_head) = fresh_signer_head(&state).await else {
         state.readiness.set_reconciliation(false);
         tracing::warn!(event = "settlement_paused_after_relayer_recheck");
         return;
     };
-    if current_relayer.access_key_nonce != relayer_status.access_key_nonce {
-        let public_key = state.provider.as_near().relayer_public_key().to_string();
+    if current_head.signer_nonce != signer_head.signer_nonce {
+        let public_key = state.provider.signer_public_key();
         let _quarantine = state
             .store
             .quarantine_relayer(
@@ -1218,7 +1202,7 @@ async fn run_new_settlement(
                 &state.config.relayer_account_id,
                 &public_key,
                 "relayer nonce changed between preparation and broadcast",
-                &current_relayer.access_key_nonce.to_string(),
+                &current_head.signer_nonce.to_string(),
             )
             .await;
         state.readiness.set_relayer(false);
@@ -1246,31 +1230,20 @@ async fn run_new_settlement(
         tracing::warn!(event = "settlement_paused_before_broadcast");
         return;
     }
-    let lookup = state
-        .provider
-        .as_near().broadcast_exact(prepared.signed_transaction_bytes())
-        .await;
-    match lookup {
-        Ok(TransactionLookup::Final(outcome)) => {
-            finalize_outcome(
-                &state,
-                settlement_id,
-                &payment,
-                prepared.transaction_hash,
-                &outcome,
-            )
-            .await;
+    match state.provider.broadcast(&prepared, &payment).await {
+        BroadcastOutcome::Terminal(outcome) => {
+            finalize_terminal(&state, settlement_id, &payment, outcome).await;
         }
-        Err(NearRpcError::TransactionRejected) => {
+        BroadcastOutcome::Rejected(_) => {
             terminal_transaction_rejected(
                 &state,
                 settlement_id,
-                Some(payment.payer.to_string()),
-                prepared.transaction_hash,
+                Some(payment.payer.clone()),
+                prepared.submit_hash.clone(),
             )
             .await;
         }
-        Ok(TransactionLookup::Pending(_) | TransactionLookup::Unknown) | Err(_) => {
+        BroadcastOutcome::Pending => {
             // Indeterminate: exact bytes/hash stay submitted for reconciliation.
             state.readiness.set_reconciliation(false);
             tracing::warn!(event = "settlement_broadcast_indeterminate");
@@ -1278,6 +1251,35 @@ async fn run_new_settlement(
     }
 }
 
+async fn fresh_signer_head(state: &AppState) -> Result<SignerHead, StoreError> {
+    let head = state.provider.signer_head().await.map_err(|_| {
+        state.readiness.set_relayer(false);
+        StoreError::Corrupt("relayer chain state is unavailable".to_owned())
+    })?;
+    let policy_active = state
+        .store
+        .relayer_is_active(
+            &state.config.network,
+            &state.config.relayer_account_id,
+            &head.signer_public_key,
+        )
+        .await?;
+    let funded = decimal_is_at_least(
+        &head.signer_balance_atomic.to_string(),
+        &state.config.sponsorship.balance_hard_stop_yocto_near,
+    );
+    if !policy_active || !funded {
+        state.readiness.set_relayer(false);
+        return Err(StoreError::Corrupt(
+            "relayer policy or balance hard stop is not satisfied".to_owned(),
+        ));
+    }
+    state.readiness.set_relayer(true);
+    Ok(head)
+}
+
+// Concrete relayer snapshot still used by the reconcile path (neutralized in the
+// reconcile increment alongside the backup-head/query/rebroadcast cluster).
 async fn fresh_relayer_status(state: &AppState) -> Result<RelayerStatus, StoreError> {
     let status = state.provider.as_near().relayer_status().await.map_err(|_| {
         state.readiness.set_relayer(false);
@@ -1306,65 +1308,39 @@ async fn fresh_relayer_status(state: &AppState) -> Result<RelayerStatus, StoreEr
     Ok(status)
 }
 
-async fn finalize_outcome(
+async fn finalize_terminal(
     state: &AppState,
     settlement_id: Uuid,
     payment: &VerifiedPayment,
-    transaction_hash: CryptoHash,
-    outcome: &FinalExecutionOutcomeView,
+    outcome: TerminalOutcome,
 ) {
-    if let Err(error) = validate_final_outcome_identity(
-        outcome,
-        transaction_hash,
-        &state.provider.as_near().relayer_account_id(),
-        &payment.payer,
-    ) {
-        state.readiness.set_reconciliation(false);
-        tracing::warn!(
-            event = "settlement_outcome_identity_indeterminate",
-            reason = %error
-        );
-        return;
-    }
-    let (gas_burnt, tokens_burnt) = execution_cost(outcome);
-    let transaction = transaction_hash.to_string();
-    let (terminal_state, response, error_code) =
-        match interpret_final_outcome(outcome, &payment.payer, &payment.requirements.asset) {
-            Ok(_) => (
-                SettlementState::Succeeded,
-                SettleResponse::success(
-                    payment.payer.to_string(),
-                    transaction,
-                    state.config.network.clone(),
-                ),
-                None,
+    let (terminal_state, response, error_code) = if outcome.success {
+        (
+            SettlementState::Succeeded,
+            SettleResponse::success(
+                payment.payer.clone(),
+                outcome.tx_hash.clone(),
+                state.config.network.clone(),
             ),
-            Err(error) if error.is_definitive_failure() => (
-                SettlementState::Failed,
-                SettleResponse::failure(
-                    "transaction_failed",
-                    Some(error.to_string()),
-                    Some(payment.payer.to_string()),
-                    transaction,
-                    state.config.network.clone(),
-                ),
-                Some("transaction_failed".to_owned()),
+            None,
+        )
+    } else {
+        (
+            SettlementState::Failed,
+            SettleResponse::failure(
+                "transaction_failed",
+                outcome.failure_detail.clone(),
+                Some(payment.payer.clone()),
+                outcome.tx_hash.clone(),
+                state.config.network.clone(),
             ),
-            Err(error) => {
-                state.readiness.set_reconciliation(false);
-                tracing::warn!(
-                    event = "settlement_receipt_indeterminate",
-                    reason = %error
-                );
-                return;
-            }
-        };
-    let (metric_result, metric_reason) = match terminal_state {
-        SettlementState::Succeeded => ("succeeded", "success"),
-        SettlementState::Failed => ("failed", "transaction_failed"),
-        SettlementState::Reserved | SettlementState::Prepared | SettlementState::Submitted => {
-            ("failed", "invalid_terminal_state")
-        }
+            Some("transaction_failed".to_owned()),
+        )
+    };
+    let (metric_result, metric_reason) = if outcome.success {
+        ("succeeded", "success")
+    } else {
+        ("failed", "transaction_failed")
     };
     let Ok(bytes) = serde_json::to_vec(&response) else {
         tracing::error!(event = "terminal_response_serialization_failed");
@@ -1377,9 +1353,9 @@ async fn finalize_outcome(
         response_bytes: bytes,
         error_code,
         error_detail: None,
-        gas_burnt: Some(gas_burnt.to_string()),
-        tokens_burnt: Some(tokens_burnt.to_string()),
-        actual_yocto_near: tokens_burnt.to_string(),
+        gas_burnt: Some(outcome.gas_units.to_string()),
+        tokens_burnt: Some(outcome.fee_atomic.to_string()),
+        actual_yocto_near: outcome.fee_atomic.to_string(),
     };
     if state.store.mark_terminal(&entry).await.is_err() {
         state.readiness.set_reconciliation(false);
@@ -1387,7 +1363,7 @@ async fn finalize_outcome(
     } else {
         state
             .metrics
-            .record_settlement_cost(gas_burnt, yocto_near_metric(tokens_burnt));
+            .record_settlement_cost(outcome.gas_units, yocto_near_metric(outcome.fee_atomic));
         state
             .metrics
             .record_settlement_result(metric_result, metric_reason);
@@ -1494,13 +1470,13 @@ async fn terminal_transaction_rejected(
     state: &AppState,
     settlement_id: Uuid,
     payer: Option<String>,
-    transaction_hash: CryptoHash,
+    transaction_hash: String,
 ) {
     let response = SettleResponse::failure(
         "transaction_rejected",
         None,
         payer,
-        transaction_hash.to_string(),
+        transaction_hash,
         state.config.network.clone(),
     );
     let Ok(response_bytes) = serde_json::to_vec(&response) else {
@@ -1761,7 +1737,8 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
             finalize_reconciled(state, record, &outcome, &payer, &asset, hash).await?;
         }
         Err(NearRpcError::TransactionRejected) => {
-            terminal_transaction_rejected(state, record.id, Some(record.payer.clone()), hash).await;
+            terminal_transaction_rejected(state, record.id, Some(record.payer.clone()), hash.to_string())
+                .await;
         }
         Ok(TransactionLookup::Pending(_) | TransactionLookup::Unknown) | Err(_) => {}
     }
