@@ -41,23 +41,9 @@ separately.
   change. Both warnings from the probe (root `favicon.ico`,
   `info.contact.email`) are fixed on our side so registration is
   turnkey once they add NEAR.
-- **Drafted feature request** (submit at
-  <https://github.com/Merit-Systems/x402scan/issues/new>):
-
-  > **Title:** Support NEAR (`near:mainnet`) resources
-  >
-  > x402scan currently indexes `base` and `solana` only
-  > (`SUPPORTED_CHAINS` in `apps/scan/src/types/chain.ts`); registration
-  > of a NEAR resource fails with `No supported networks. Got:
-  > [near:mainnet]`. There is now a production NEAR x402 facilitator
-  > (<https://x402.mikedotexe.com/supported>, x402 v2 `exact`,
-  > `payment-identifier` extension) and a live paid resource
-  > (<https://x402-demo.mikedotexe.com/work>) that passes your discovery
-  > probe end to end — OpenAPI-first document with `x-payment-info`,
-  > input schema, runtime 402 with v2 `PAYMENT-REQUIRED` header —
-  > failing only on the network allowlist. Payments settle NEP-141
-  > USDC (`17208628…33a1`) via NEP-366 signed delegates. Happy to help
-  > test NEAR support or provide a reference integration.
+- **Feature request filed 2026-07-23**:
+  <https://github.com/Merit-Systems/x402scan/issues/1040> (Support NEAR
+  `near:mainnet` resources). Registration is turnkey once it lands.
 
 ### 2. x402 Foundation repo — facilitators table (PR)
 
@@ -91,7 +77,44 @@ separately.
 - Open the PR from
   <https://github.com/Merit-Systems/awesome-agentic-commerce/compare/main...mikedotexe:awesome-agentic-commerce:x402-near-facilitator-listing>
 
-### 5. Bazaar — reference only
+### 5. x402.watch / @swader/x402facilitators — facilitator directory (PR)
+
+- Chain-neutral community directory (<https://facilitators.x402.watch>,
+  npm `@swader/x402facilitators`) that other tools consume as a
+  facilitator metadata source. Upstream: `Swader/x402facilitators`.
+- Staged branch (adds `Network.NEAR`, the NEP-141 USDC token constant,
+  explorer/icon wiring, and our entry; `tsc --noEmit` clean):
+  <https://github.com/mikedotexe/x402facilitators/tree/x402-near-facilitator-listing>
+- Open the PR from
+  <https://github.com/Swader/x402facilitators/compare/main...mikedotexe:x402facilitators:x402-near-facilitator-listing>
+- The entry's logo references
+  `docs/assets/near-x402-facilitator.svg` in this repository (must be on
+  `main` before the PR is opened).
+
+### 6. NEAR Catalog — ecosystem directory (web form)
+
+- Submit at <https://submit.nearcatalog.xyz/> (requires NEAR-account
+  login; editorial review). The NEAR-native directory — strongest
+  audience fit. Suggested category: infrastructure/payments; link the
+  repo, both facilitator endpoints, and the demo workload.
+
+### 7. near/awesome-near — official curated list (PR)
+
+- Staged branch (entry in "AI and Cloud Services"):
+  <https://github.com/mikedotexe/awesome-near/tree/x402-near-facilitator-listing>
+- Open the PR from
+  <https://github.com/near/awesome-near/compare/main...mikedotexe:awesome-near:x402-near-facilitator-listing>
+
+### 8. x402-list.com — facilitator registry (blocked: address format)
+
+- Submission API (`POST /api/v1/submit`, `"type": "facilitator"`)
+  accepts arbitrary network names, but `settler_addresses` validation
+  only allows EVM `0x` or Solana base58 — NEAR named accounts
+  (`x402-relayer2.mike.near`) cannot pass. Feature request needed
+  before we can submit; their on-chain probe is EVM-only anyway
+  (non-EVM claims are manually reviewed).
+
+### 9. Bazaar — reference only
 
 - Coinbase's Bazaar discovery layer
   (<https://docs.cdp.coinbase.com/x402/bazaar>) indexes resources behind
