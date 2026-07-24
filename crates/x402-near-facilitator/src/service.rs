@@ -23,7 +23,6 @@ use near_primitives::action::Action;
 use near_primitives::hash::CryptoHash;
 use near_primitives::transaction::Transaction;
 use near_primitives::types::AccountId;
-use near_primitives::views::FinalExecutionOutcomeView;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
@@ -34,10 +33,8 @@ use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Instrument as _;
 use uuid::Uuid;
 use x402_chain_near::{
-    NearChainProvider, NearRpcError, RelayerHead, RelayerStatus, TransactionLookup,
-    VerificationFailure, VerificationPolicy, VerifiedPayment, decode_signed_delegate,
-    decode_signed_transaction, interpret_final_outcome, signed_delegate_hash,
-    signed_transaction_hash, validate_final_outcome_identity,
+    VerificationFailure, VerificationPolicy, decode_signed_delegate, decode_signed_transaction,
+    signed_delegate_hash, signed_transaction_hash,
 };
 use x402_facilitator_local::FacilitatorLocal;
 use x402_types::facilitator::Facilitator;
@@ -45,6 +42,10 @@ use x402_types::scheme::SchemeRegistry;
 
 use crate::VERSION;
 use crate::auth::{ApiKeyAuthenticator, AuthError, AuthenticatedClient};
+use crate::chain::{
+    BroadcastOutcome, ChainProvider, ReconcileVerdict, SignerHead, TerminalOutcome, VerifiedDetail,
+    VerifiedPayment,
+};
 use crate::config::ServiceConfig;
 use crate::leadership::ReadinessState;
 use crate::protocol::{
@@ -67,7 +68,7 @@ pub struct AppState {
     store: PgStore,
     auth: ApiKeyAuthenticator,
     facilitator: Arc<FacilitatorLocal<SchemeRegistry>>,
-    provider: Arc<NearChainProvider>,
+    provider: Arc<ChainProvider>,
     readiness: ReadinessState,
     rates: Arc<RateLimiter>,
     verify_slots: Arc<Semaphore>,
@@ -82,7 +83,7 @@ impl AppState {
         store: PgStore,
         auth: ApiKeyAuthenticator,
         facilitator: FacilitatorLocal<SchemeRegistry>,
-        provider: NearChainProvider,
+        provider: ChainProvider,
         readiness: ReadinessState,
         metrics: Metrics,
     ) -> Self {
@@ -109,10 +110,6 @@ impl AppState {
         &self.store
     }
 
-    pub fn provider(&self) -> &NearChainProvider {
-        &self.provider
-    }
-
     pub fn relayer_lock(&self) -> Arc<Mutex<()>> {
         Arc::clone(&self.relayer_lock)
     }
@@ -122,46 +119,30 @@ impl AppState {
     /// relayer key must be `FullAccess`, active in policy, and funded above the
     /// hard-stop threshold.
     pub async fn refresh_chain_readiness(&self) -> bool {
-        let expected_chain_id = match self.config.environment {
-            crate::config::Environment::Mainnet => "mainnet",
-            crate::config::Environment::Testnet => "testnet",
-        };
-        let rpc_ready = matches!(
-            self.provider.rpc_network_id().await,
-            Ok(network) if network == expected_chain_id
-        ) && matches!(
-            self.provider.backup_rpc_network_id().await,
-            Ok(network) if network == expected_chain_id
-        ) && self.provider.rpc_final_block().await.is_ok()
-            && self.provider.backup_rpc_final_block().await.is_ok();
+        let rpc_ready = self.provider.readiness_probe().await;
         self.readiness.set_rpc(rpc_ready);
 
-        let relayer_status = self.provider.relayer_status().await;
+        let signer = self.provider.signer_head().await;
         let policy_active = self
             .store
             .relayer_is_active(
                 &self.config.network,
                 &self.config.relayer_account_id,
-                &self.provider.relayer_public_key().to_string(),
+                &self.provider.signer_public_key(),
             )
             .await
             .unwrap_or(false);
-        if let Ok(status) = &relayer_status
-            && let Ok(balance_yocto_near) = status
-                .account
-                .amount
-                .as_yoctonear()
-                .to_string()
-                .parse::<f64>()
+        if let Ok(head) = &signer
+            && let Ok(balance_yocto_near) = head.signer_balance_atomic.to_string().parse::<f64>()
         {
             self.metrics.record_relayer(
                 balance_yocto_near / 1_000_000_000_000_000_000_000_000_f64,
                 !policy_active,
             );
         }
-        let relayer_ready = relayer_status.is_ok_and(|status| {
+        let relayer_ready = signer.is_ok_and(|head| {
             decimal_is_at_least(
-                &status.account.amount.as_yoctonear().to_string(),
+                &head.signer_balance_atomic.to_string(),
                 &self.config.sponsorship.balance_hard_stop_yocto_near,
             )
         }) && policy_active;
@@ -695,7 +676,7 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
     };
     let verified = match state.provider.verify(&parsed.raw, &policy).await {
         Ok(verified) => verified,
-        Err(failure) if verification_is_rpc_ambiguous(failure) => {
+        Err(rejection) if rejection.rpc_ambiguous => {
             if let Some(response) = prior_settlement_race_response(
                 state,
                 client.id,
@@ -713,7 +694,7 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
             )
             .into_response();
         }
-        Err(failure) => {
+        Err(rejection) => {
             if let Some(response) = prior_settlement_race_response(
                 state,
                 client.id,
@@ -728,7 +709,7 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
             return protocol_json(
                 StatusCode::OK,
                 &SettleResponse::failure(
-                    failure.reason(),
+                    rejection.reason,
                     None,
                     None,
                     String::new(),
@@ -737,7 +718,10 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
             );
         }
     };
-    if verified.payment_hash() != &decoded.payment_hash {
+    // The neutral verified payment drives the journal; the NEAR reservation row
+    // still records delegate identity fields (generalized at migration 0002).
+    let VerifiedDetail::Near(near_verified) = &verified.detail;
+    if verified.payment_hash != decoded.payment_hash {
         return ApiError::unavailable(
             "verification_inconsistent",
             "payment verification was internally inconsistent",
@@ -748,7 +732,7 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
         id: Uuid::new_v4(),
         api_client_id: client.id,
         payment_identifier: parsed.meta.payment_identifier.clone(),
-        payment_hash: *verified.payment_hash(),
+        payment_hash: verified.payment_hash,
         request_fingerprint: fingerprint,
         x402_version: parsed.meta.x402_version,
         scheme: parsed.meta.scheme.clone(),
@@ -756,10 +740,10 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
         asset: parsed.meta.asset.clone(),
         pay_to: parsed.meta.pay_to.clone(),
         amount: parsed.meta.amount.clone(),
-        payer: verified.payer.to_string(),
-        delegate_public_key: verified.payer_public_key.to_string(),
-        delegate_nonce: verified.delegate_nonce.to_string(),
-        delegate_max_block_height: verified.max_block_height.to_string(),
+        payer: verified.payer.clone(),
+        delegate_public_key: near_verified.payer_public_key.to_string(),
+        delegate_nonce: near_verified.delegate_nonce.to_string(),
+        delegate_max_block_height: near_verified.max_block_height.to_string(),
         policy_snapshot: state.config.policy_snapshot(),
         reservation_yocto_near: state.config.sponsorship.reservation_yocto_near.clone(),
         global_daily_budget_yocto_near: state.config.sponsorship.global_daily_yocto_near.clone(),
@@ -1071,18 +1055,6 @@ fn response_is_rpc_ambiguous(value: &Value) -> bool {
         })
 }
 
-const fn verification_is_rpc_ambiguous(failure: VerificationFailure) -> bool {
-    matches!(
-        failure,
-        VerificationFailure::CurrentBlockHeightUnavailable
-            | VerificationFailure::AccessKeyLookupFailed
-            | VerificationFailure::AccountLookupFailed
-            | VerificationFailure::TokenAccountLookupFailed
-            | VerificationFailure::BalanceCheckFailed
-            | VerificationFailure::StorageCheckFailed
-    )
-}
-
 fn protocol_json<T: Serialize>(status: StatusCode, body: &T) -> Response {
     match serde_json::to_vec(body) {
         Ok(bytes) => raw_json(status, bytes),
@@ -1162,7 +1134,7 @@ async fn run_new_settlement(
     };
     let payment = match state.provider.verify(&request, &policy).await {
         Ok(payment) => payment,
-        Err(failure) if verification_is_rpc_ambiguous(failure) => {
+        Err(rejection) if rejection.rpc_ambiguous => {
             terminal_service_failure(
                 &state,
                 settlement_id,
@@ -1172,12 +1144,12 @@ async fn run_new_settlement(
             .await;
             return;
         }
-        Err(failure) => {
-            terminal_protocol_failure(&state, settlement_id, failure.reason(), None, None).await;
+        Err(rejection) => {
+            terminal_protocol_failure(&state, settlement_id, rejection.reason, None, None).await;
             return;
         }
     };
-    let Ok(relayer_status) = fresh_relayer_status(&state).await else {
+    let Ok(signer_head) = fresh_signer_head(&state).await else {
         terminal_service_failure(
             &state,
             settlement_id,
@@ -1187,15 +1159,7 @@ async fn run_new_settlement(
         .await;
         return;
     };
-    let relayer_head = RelayerHead {
-        block_height: relayer_status.block_height,
-        block_hash: relayer_status.block_hash,
-        access_key_nonce: relayer_status.access_key_nonce,
-    };
-    let Ok(prepared) = state
-        .provider
-        .prepare_outer_transaction(&payment, relayer_head)
-    else {
+    let Ok(prepared) = state.provider.prepare(&payment, &signer_head) else {
         terminal_service_failure(
             &state,
             settlement_id,
@@ -1207,11 +1171,11 @@ async fn run_new_settlement(
     };
     let journal = PreparedJournalEntry {
         settlement_id,
-        relayer_account_id: prepared.signer_id.to_string(),
-        relayer_public_key: prepared.signer_public_key.to_string(),
-        relayer_nonce: prepared.relayer_nonce.to_string(),
-        transaction_bytes: prepared.signed_transaction_bytes().to_vec(),
-        transaction_hash: prepared.transaction_hash.to_string(),
+        relayer_account_id: prepared.signer_id.clone(),
+        relayer_public_key: prepared.signer_public_key.clone(),
+        relayer_nonce: prepared.signer_nonce.to_string(),
+        transaction_bytes: prepared.submit_bytes.clone(),
+        transaction_hash: prepared.submit_hash.clone(),
     };
     if state.store.mark_prepared(&journal).await.is_err() {
         state.readiness.set_reconciliation(false);
@@ -1219,13 +1183,13 @@ async fn run_new_settlement(
         return;
     }
 
-    let Ok(current_relayer) = fresh_relayer_status(&state).await else {
+    let Ok(current_head) = fresh_signer_head(&state).await else {
         state.readiness.set_reconciliation(false);
         tracing::warn!(event = "settlement_paused_after_relayer_recheck");
         return;
     };
-    if current_relayer.access_key_nonce != relayer_status.access_key_nonce {
-        let public_key = state.provider.relayer_public_key().to_string();
+    if current_head.signer_nonce != signer_head.signer_nonce {
+        let public_key = state.provider.signer_public_key();
         let _quarantine = state
             .store
             .quarantine_relayer(
@@ -1233,7 +1197,7 @@ async fn run_new_settlement(
                 &state.config.relayer_account_id,
                 &public_key,
                 "relayer nonce changed between preparation and broadcast",
-                &current_relayer.access_key_nonce.to_string(),
+                &current_head.signer_nonce.to_string(),
             )
             .await;
         state.readiness.set_relayer(false);
@@ -1261,31 +1225,20 @@ async fn run_new_settlement(
         tracing::warn!(event = "settlement_paused_before_broadcast");
         return;
     }
-    let lookup = state
-        .provider
-        .broadcast_exact(prepared.signed_transaction_bytes())
-        .await;
-    match lookup {
-        Ok(TransactionLookup::Final(outcome)) => {
-            finalize_outcome(
-                &state,
-                settlement_id,
-                &payment,
-                prepared.transaction_hash,
-                &outcome,
-            )
-            .await;
+    match state.provider.broadcast(&prepared, &payment).await {
+        BroadcastOutcome::Terminal(outcome) => {
+            finalize_terminal(&state, settlement_id, &payment, outcome).await;
         }
-        Err(NearRpcError::TransactionRejected) => {
+        BroadcastOutcome::Rejected(_) => {
             terminal_transaction_rejected(
                 &state,
                 settlement_id,
-                Some(payment.payer.to_string()),
-                prepared.transaction_hash,
+                Some(payment.payer.clone()),
+                prepared.submit_hash.clone(),
             )
             .await;
         }
-        Ok(TransactionLookup::Pending(_) | TransactionLookup::Unknown) | Err(_) => {
+        BroadcastOutcome::Pending => {
             // Indeterminate: exact bytes/hash stay submitted for reconciliation.
             state.readiness.set_reconciliation(false);
             tracing::warn!(event = "settlement_broadcast_indeterminate");
@@ -1293,22 +1246,21 @@ async fn run_new_settlement(
     }
 }
 
-async fn fresh_relayer_status(state: &AppState) -> Result<RelayerStatus, StoreError> {
-    let status = state.provider.relayer_status().await.map_err(|_| {
+async fn fresh_signer_head(state: &AppState) -> Result<SignerHead, StoreError> {
+    let head = state.provider.signer_head().await.map_err(|_| {
         state.readiness.set_relayer(false);
         StoreError::Corrupt("relayer chain state is unavailable".to_owned())
     })?;
-    let public_key = state.provider.relayer_public_key().to_string();
     let policy_active = state
         .store
         .relayer_is_active(
             &state.config.network,
             &state.config.relayer_account_id,
-            &public_key,
+            &head.signer_public_key,
         )
         .await?;
     let funded = decimal_is_at_least(
-        &status.account.amount.as_yoctonear().to_string(),
+        &head.signer_balance_atomic.to_string(),
         &state.config.sponsorship.balance_hard_stop_yocto_near,
     );
     if !policy_active || !funded {
@@ -1318,68 +1270,42 @@ async fn fresh_relayer_status(state: &AppState) -> Result<RelayerStatus, StoreEr
         ));
     }
     state.readiness.set_relayer(true);
-    Ok(status)
+    Ok(head)
 }
 
-async fn finalize_outcome(
+async fn finalize_terminal(
     state: &AppState,
     settlement_id: Uuid,
     payment: &VerifiedPayment,
-    transaction_hash: CryptoHash,
-    outcome: &FinalExecutionOutcomeView,
+    outcome: TerminalOutcome,
 ) {
-    if let Err(error) = validate_final_outcome_identity(
-        outcome,
-        transaction_hash,
-        &state.provider.relayer_account_id(),
-        &payment.payer,
-    ) {
-        state.readiness.set_reconciliation(false);
-        tracing::warn!(
-            event = "settlement_outcome_identity_indeterminate",
-            reason = %error
-        );
-        return;
-    }
-    let (gas_burnt, tokens_burnt) = execution_cost(outcome);
-    let transaction = transaction_hash.to_string();
-    let (terminal_state, response, error_code) =
-        match interpret_final_outcome(outcome, &payment.payer, &payment.requirements.asset) {
-            Ok(_) => (
-                SettlementState::Succeeded,
-                SettleResponse::success(
-                    payment.payer.to_string(),
-                    transaction,
-                    state.config.network.clone(),
-                ),
-                None,
+    let (terminal_state, response, error_code) = if outcome.success {
+        (
+            SettlementState::Succeeded,
+            SettleResponse::success(
+                payment.payer.clone(),
+                outcome.tx_hash.clone(),
+                state.config.network.clone(),
             ),
-            Err(error) if error.is_definitive_failure() => (
-                SettlementState::Failed,
-                SettleResponse::failure(
-                    "transaction_failed",
-                    Some(error.to_string()),
-                    Some(payment.payer.to_string()),
-                    transaction,
-                    state.config.network.clone(),
-                ),
-                Some("transaction_failed".to_owned()),
+            None,
+        )
+    } else {
+        (
+            SettlementState::Failed,
+            SettleResponse::failure(
+                "transaction_failed",
+                outcome.failure_detail.clone(),
+                Some(payment.payer.clone()),
+                outcome.tx_hash.clone(),
+                state.config.network.clone(),
             ),
-            Err(error) => {
-                state.readiness.set_reconciliation(false);
-                tracing::warn!(
-                    event = "settlement_receipt_indeterminate",
-                    reason = %error
-                );
-                return;
-            }
-        };
-    let (metric_result, metric_reason) = match terminal_state {
-        SettlementState::Succeeded => ("succeeded", "success"),
-        SettlementState::Failed => ("failed", "transaction_failed"),
-        SettlementState::Reserved | SettlementState::Prepared | SettlementState::Submitted => {
-            ("failed", "invalid_terminal_state")
-        }
+            Some("transaction_failed".to_owned()),
+        )
+    };
+    let (metric_result, metric_reason) = if outcome.success {
+        ("succeeded", "success")
+    } else {
+        ("failed", "transaction_failed")
     };
     let Ok(bytes) = serde_json::to_vec(&response) else {
         tracing::error!(event = "terminal_response_serialization_failed");
@@ -1392,9 +1318,9 @@ async fn finalize_outcome(
         response_bytes: bytes,
         error_code,
         error_detail: None,
-        gas_burnt: Some(gas_burnt.to_string()),
-        tokens_burnt: Some(tokens_burnt.to_string()),
-        actual_yocto_near: tokens_burnt.to_string(),
+        gas_burnt: Some(outcome.gas_units.to_string()),
+        tokens_burnt: Some(outcome.fee_atomic.to_string()),
+        actual_yocto_near: outcome.fee_atomic.to_string(),
     };
     if state.store.mark_terminal(&entry).await.is_err() {
         state.readiness.set_reconciliation(false);
@@ -1402,7 +1328,7 @@ async fn finalize_outcome(
     } else {
         state
             .metrics
-            .record_settlement_cost(gas_burnt, yocto_near_metric(tokens_burnt));
+            .record_settlement_cost(outcome.gas_units, yocto_near_metric(outcome.fee_atomic));
         state
             .metrics
             .record_settlement_result(metric_result, metric_reason);
@@ -1412,20 +1338,6 @@ async fn finalize_outcome(
             reason = metric_reason
         );
     }
-}
-
-fn execution_cost(outcome: &FinalExecutionOutcomeView) -> (u64, u128) {
-    let mut gas = outcome.transaction_outcome.outcome.gas_burnt.as_gas();
-    let mut tokens = outcome
-        .transaction_outcome
-        .outcome
-        .tokens_burnt
-        .as_yoctonear();
-    for receipt in &outcome.receipts_outcome {
-        gas = gas.saturating_add(receipt.outcome.gas_burnt.as_gas());
-        tokens = tokens.saturating_add(receipt.outcome.tokens_burnt.as_yoctonear());
-    }
-    (gas, tokens)
 }
 
 fn yocto_near_metric(value: u128) -> f64 {
@@ -1509,13 +1421,13 @@ async fn terminal_transaction_rejected(
     state: &AppState,
     settlement_id: Uuid,
     payer: Option<String>,
-    transaction_hash: CryptoHash,
+    transaction_hash: String,
 ) {
     let response = SettleResponse::failure(
         "transaction_rejected",
         None,
         payer,
-        transaction_hash.to_string(),
+        transaction_hash,
         state.config.network.clone(),
     );
     let Ok(response_bytes) = serde_json::to_vec(&response) else {
@@ -1618,8 +1530,8 @@ pub async fn reconcile(state: &AppState) -> Result<(), StoreError> {
 // Recovery keeps every exact-byte/hash and dual-RPC decision adjacent.
 #[allow(clippy::too_many_lines)]
 async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Result<(), StoreError> {
-    let expected_account = state.provider.relayer_account_id().to_string();
-    let expected_public_key = state.provider.relayer_public_key().to_string();
+    let expected_account = state.provider.signer_account_id();
+    let expected_public_key = state.provider.signer_public_key();
     if record.relayer_account_id.as_deref() != Some(expected_account.as_str())
         || record.relayer_public_key.as_deref() != Some(expected_public_key.as_str())
     {
@@ -1649,62 +1561,51 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
     validate_stored_transaction(record, bytes, hash, &signer).inspect_err(|_| {
         state.readiness.set_relayer(false);
     })?;
-    let primary = state.provider.query_transaction(hash, signer.clone()).await;
-    let backup = state
+    // The provider performs the dual-RPC query, raw-outcome conflict check, and
+    // receipt interpretation, returning a neutral verdict.
+    let status = state
         .provider
-        .query_transaction_backup(hash, signer.clone())
+        .reconcile_status(&hash.to_string(), signer.as_str(), &record.payer, &record.asset)
         .await;
-    let primary_final = final_outcome(&primary);
-    let backup_final = final_outcome(&backup);
-    if final_outcomes_conflict(primary_final, backup_final) {
-        state.readiness.set_reconciliation(false);
-        return Err(StoreError::Corrupt(
-            "primary and backup RPCs returned conflicting final outcomes".to_owned(),
-        ));
-    }
-    let outcome = primary_final.or(backup_final);
-    if primary_final.is_none() && backup_final.is_some() {
+    if status.rpc_failover {
         state.metrics.record_rpc_failover("reconcile_transaction");
     }
-    if let Some(outcome) = outcome {
-        let payer = record
-            .payer
-            .parse::<AccountId>()
-            .map_err(|_| StoreError::Corrupt("journal payer is invalid".to_owned()))?;
-        let asset = record
-            .asset
-            .parse::<AccountId>()
-            .map_err(|_| StoreError::Corrupt("journal asset is invalid".to_owned()))?;
-        finalize_reconciled(state, record, outcome, &payer, &asset, hash).await?;
-        return Ok(());
-    }
-    if [primary.as_ref(), backup.as_ref()]
-        .into_iter()
-        .any(|lookup| matches!(lookup, Ok(TransactionLookup::Pending(_))))
-    {
-        return Ok(());
-    }
-    let primary_unknown = lookup_is_unknown(&primary);
-    let backup_unknown = lookup_is_unknown(&backup);
-    if !primary_unknown || !backup_unknown {
-        state.readiness.set_reconciliation(false);
-        return Err(StoreError::Corrupt(
-            "RPC ambiguity prevented settlement reconciliation".to_owned(),
-        ));
+    match status.verdict {
+        ReconcileVerdict::Conflict => {
+            state.readiness.set_reconciliation(false);
+            return Err(StoreError::Corrupt(
+                "primary and backup RPCs returned conflicting final outcomes".to_owned(),
+            ));
+        }
+        ReconcileVerdict::Terminal(outcome) => {
+            finalize_reconciled_terminal(state, record, outcome).await?;
+            return Ok(());
+        }
+        ReconcileVerdict::Indeterminate(reason) => {
+            state.readiness.set_reconciliation(false);
+            tracing::warn!(event = "reconciliation_outcome_indeterminate", reason = %reason);
+            return Ok(());
+        }
+        ReconcileVerdict::Pending => return Ok(()),
+        ReconcileVerdict::Unknown => {}
+        ReconcileVerdict::Ambiguous => {
+            state.readiness.set_reconciliation(false);
+            return Err(StoreError::Corrupt(
+                "RPC ambiguity prevented settlement reconciliation".to_owned(),
+            ));
+        }
     }
 
-    let primary_status = fresh_relayer_status(state).await?;
-    let backup_head = state.provider.backup_relayer_head().await.map_err(|_| {
+    let primary_status = fresh_signer_head(state).await?;
+    let backup_head = state.provider.backup_signer_head().await.map_err(|_| {
         StoreError::Corrupt("backup relayer state unavailable during reconciliation".to_owned())
     })?;
     let prepared_nonce = record
         .relayer_nonce
         .as_deref()
-        .and_then(|nonce| nonce.parse::<u64>().ok())
+        .and_then(|nonce| nonce.parse::<u128>().ok())
         .ok_or_else(|| StoreError::Corrupt("prepared row has invalid nonce".to_owned()))?;
-    if primary_status.access_key_nonce >= prepared_nonce
-        || backup_head.access_key_nonce >= prepared_nonce
-    {
+    if primary_status.signer_nonce >= prepared_nonce || backup_head.signer_nonce >= prepared_nonce {
         let public_key = record
             .relayer_public_key
             .as_deref()
@@ -1717,8 +1618,8 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
                 public_key,
                 "nonce advanced while exact transaction remained unknown",
                 &primary_status
-                    .access_key_nonce
-                    .max(backup_head.access_key_nonce)
+                    .signer_nonce
+                    .max(backup_head.signer_nonce)
                     .to_string(),
             )
             .await?;
@@ -1731,7 +1632,11 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
         .delegate_max_block_height
         .parse::<u64>()
         .map_err(|_| StoreError::Corrupt("journal delegate expiry is invalid".to_owned()))?;
-    if primary_status.block_height.max(backup_head.block_height) >= delegate_max_height {
+    if primary_status
+        .chain_block_height
+        .max(backup_head.chain_block_height)
+        >= delegate_max_height
+    {
         terminal_protocol_failure(
             state,
             record.id,
@@ -1751,34 +1656,33 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
             "leadership lost before reconciliation broadcast".to_owned(),
         ));
     }
-    let current_primary = fresh_relayer_status(state).await?;
-    let current_backup = state.provider.backup_relayer_head().await.map_err(|_| {
+    let current_primary = fresh_signer_head(state).await?;
+    let current_backup = state.provider.backup_signer_head().await.map_err(|_| {
         StoreError::Corrupt("backup relayer state unavailable before rebroadcast".to_owned())
     })?;
-    if current_primary.access_key_nonce != primary_status.access_key_nonce
-        || current_backup.access_key_nonce != backup_head.access_key_nonce
+    if current_primary.signer_nonce != primary_status.signer_nonce
+        || current_backup.signer_nonce != backup_head.signer_nonce
     {
         state.readiness.set_relayer(false);
         return Err(StoreError::Corrupt(
             "relayer nonce changed before exact-byte rebroadcast".to_owned(),
         ));
     }
-    match state.provider.broadcast_exact(bytes).await {
-        Ok(TransactionLookup::Final(outcome)) => {
-            let payer = record
-                .payer
-                .parse::<AccountId>()
-                .map_err(|_| StoreError::Corrupt("journal payer is invalid".to_owned()))?;
-            let asset = record
-                .asset
-                .parse::<AccountId>()
-                .map_err(|_| StoreError::Corrupt("journal asset is invalid".to_owned()))?;
-            finalize_reconciled(state, record, &outcome, &payer, &asset, hash).await?;
+    match state
+        .provider
+        .rebroadcast(bytes, &hash.to_string(), &record.payer, &record.asset)
+        .await
+    {
+        BroadcastOutcome::Terminal(outcome) => {
+            finalize_reconciled_terminal(state, record, outcome).await?;
         }
-        Err(NearRpcError::TransactionRejected) => {
-            terminal_transaction_rejected(state, record.id, Some(record.payer.clone()), hash).await;
+        BroadcastOutcome::Rejected(_) => {
+            terminal_transaction_rejected(state, record.id, Some(record.payer.clone()), hash.to_string())
+                .await;
         }
-        Ok(TransactionLookup::Pending(_) | TransactionLookup::Unknown) | Err(_) => {}
+        // Still in flight (or an indeterminate final): stay submitted; the outer
+        // reconcile loop recomputes readiness from the remaining nonterminal set.
+        BroadcastOutcome::Pending => {}
     }
     Ok(())
 }
@@ -1867,91 +1771,43 @@ fn validate_stored_transaction(
     Ok(())
 }
 
-fn lookup_is_unknown(lookup: &Result<TransactionLookup, NearRpcError>) -> bool {
-    matches!(
-        lookup,
-        Ok(TransactionLookup::Unknown) | Err(NearRpcError::TransactionUnknown)
-    )
-}
-
-fn final_outcome(
-    lookup: &Result<TransactionLookup, NearRpcError>,
-) -> Option<&FinalExecutionOutcomeView> {
-    match lookup {
-        Ok(TransactionLookup::Final(outcome)) => Some(outcome.as_ref()),
-        Ok(TransactionLookup::Unknown | TransactionLookup::Pending(_)) | Err(_) => None,
-    }
-}
-
-fn final_outcomes_conflict<T: Eq>(primary: Option<&T>, backup: Option<&T>) -> bool {
-    matches!((primary, backup), (Some(primary), Some(backup)) if primary != backup)
-}
-
 fn can_reconciliation_broadcast(state: &AppState) -> bool {
     let snapshot = state.readiness.snapshot();
     snapshot.leadership && snapshot.rpc && snapshot.relayer
 }
 
-async fn finalize_reconciled(
+async fn finalize_reconciled_terminal(
     state: &AppState,
     record: &SettlementRecord,
-    outcome: &FinalExecutionOutcomeView,
-    payer: &AccountId,
-    asset: &AccountId,
-    transaction_hash: CryptoHash,
+    outcome: TerminalOutcome,
 ) -> Result<(), StoreError> {
-    if let Err(error) = validate_final_outcome_identity(
-        outcome,
-        transaction_hash,
-        &state.provider.relayer_account_id(),
-        payer,
-    ) {
-        state.readiness.set_reconciliation(false);
-        tracing::warn!(
-            event = "reconciliation_outcome_identity_indeterminate",
-            reason = %error
-        );
-        return Ok(());
-    }
-    let (gas_burnt, tokens_burnt) = execution_cost(outcome);
-    let transaction = transaction_hash.to_string();
-    let (settlement_state, response, error_code) =
-        match interpret_final_outcome(outcome, payer, asset) {
-            Ok(_) => (
-                SettlementState::Succeeded,
-                SettleResponse::success(
-                    payer.to_string(),
-                    transaction,
-                    state.config.network.clone(),
-                ),
-                None,
+    let (settlement_state, response, error_code) = if outcome.success {
+        (
+            SettlementState::Succeeded,
+            SettleResponse::success(
+                record.payer.clone(),
+                outcome.tx_hash.clone(),
+                state.config.network.clone(),
             ),
-            Err(error) if error.is_definitive_failure() => (
-                SettlementState::Failed,
-                SettleResponse::failure(
-                    "transaction_failed",
-                    Some(error.to_string()),
-                    Some(payer.to_string()),
-                    transaction,
-                    state.config.network.clone(),
-                ),
-                Some("transaction_failed".to_owned()),
+            None,
+        )
+    } else {
+        (
+            SettlementState::Failed,
+            SettleResponse::failure(
+                "transaction_failed",
+                outcome.failure_detail.clone(),
+                Some(record.payer.clone()),
+                outcome.tx_hash.clone(),
+                state.config.network.clone(),
             ),
-            Err(error) => {
-                state.readiness.set_reconciliation(false);
-                tracing::warn!(
-                    event = "reconciliation_receipt_indeterminate",
-                    reason = %error
-                );
-                return Ok(());
-            }
-        };
-    let (metric_result, metric_reason) = match settlement_state {
-        SettlementState::Succeeded => ("succeeded", "success"),
-        SettlementState::Failed => ("failed", "transaction_failed"),
-        SettlementState::Reserved | SettlementState::Prepared | SettlementState::Submitted => {
-            ("failed", "invalid_terminal_state")
-        }
+            Some("transaction_failed".to_owned()),
+        )
+    };
+    let (metric_result, metric_reason) = if outcome.success {
+        ("succeeded", "success")
+    } else {
+        ("failed", "transaction_failed")
     };
     let bytes =
         serde_json::to_vec(&response).map_err(|error| StoreError::Corrupt(error.to_string()))?;
@@ -1964,14 +1820,14 @@ async fn finalize_reconciled(
             response_bytes: bytes,
             error_code,
             error_detail: None,
-            gas_burnt: Some(gas_burnt.to_string()),
-            tokens_burnt: Some(tokens_burnt.to_string()),
-            actual_yocto_near: tokens_burnt.to_string(),
+            gas_burnt: Some(outcome.gas_units.to_string()),
+            tokens_burnt: Some(outcome.fee_atomic.to_string()),
+            actual_yocto_near: outcome.fee_atomic.to_string(),
         })
         .await?;
     state
         .metrics
-        .record_settlement_cost(gas_burnt, yocto_near_metric(tokens_burnt));
+        .record_settlement_cost(outcome.gas_units, yocto_near_metric(outcome.fee_atomic));
     state
         .metrics
         .record_settlement_result(metric_result, metric_reason);
@@ -2090,13 +1946,6 @@ mod tests {
     #[test]
     fn signed_delegate_decoder_is_linked_into_service_boundary() {
         assert!(x402_chain_near::decode_signed_delegate("not-base64").is_err());
-    }
-
-    #[test]
-    fn conflicting_final_results_fail_closed() {
-        assert!(!final_outcomes_conflict(Some(&1_u8), Some(&1_u8)));
-        assert!(final_outcomes_conflict(Some(&1_u8), Some(&2_u8)));
-        assert!(!final_outcomes_conflict(Some(&1_u8), None));
     }
 
     #[tokio::test(flavor = "current_thread")]

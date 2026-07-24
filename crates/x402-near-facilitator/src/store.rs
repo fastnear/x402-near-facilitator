@@ -8,15 +8,22 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 fn embedded_migrator() -> sqlx::migrate::Migrator {
-    let migration = sqlx::migrate::Migration::new(
+    let initial = sqlx::migrate::Migration::new(
         1,
         Cow::Borrowed("initial"),
         sqlx::migrate::MigrationType::Simple,
         Cow::Borrowed(include_str!("../../../migrations/0001_initial.sql")),
         false,
     );
+    let multichain = sqlx::migrate::Migration::new(
+        2,
+        Cow::Borrowed("multichain settlement columns"),
+        sqlx::migrate::MigrationType::Simple,
+        Cow::Borrowed(include_str!("../../../migrations/0002_multichain.sql")),
+        false,
+    );
     sqlx::migrate::Migrator {
-        migrations: Cow::Owned(vec![migration]),
+        migrations: Cow::Owned(vec![initial, multichain]),
         ..sqlx::migrate::Migrator::DEFAULT
     }
 }

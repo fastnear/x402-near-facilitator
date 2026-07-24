@@ -610,3 +610,22 @@ the host before relying on it.
 
 Never roll back migrations destructively. If the prior binary is not compatible
 with the current schema, roll forward with a fixed binary instead.
+
+### v0.2.0 multi-chain schema (migration 0002)
+
+`v0.2.0` adds migration `0002` (multi-chain settlement columns; the settlements
+non-terminal CHECK becomes chain-conditional). Per environment, testnet first:
+
+1. `install-release.sh` the v0.2.0 archive.
+2. `x402-near-admin migrate --database-url-file <migration-url>` — applies `0002`
+   (additive nullable columns + a chain-conditional CHECK). It was drilled
+   against a populated table with every settlement state (5/5 existing rows
+   preserved, `chain_kind` defaults to `near`). Run this **before** promoting the
+   binary: the v0.2.0 service refuses to start until `0002` is present
+   (`schema_compatible`).
+3. `promote-release.sh <env> v0.2.0`, restart, require startup reconciliation
+   plus `/readyz`.
+
+Rollback to `v0.1.3` is schema-safe on the `0002` schema: its `schema_compatible`
+checks only migration `1`, and its NEAR inserts satisfy the new conditional
+CHECKs. No migration is rolled back.

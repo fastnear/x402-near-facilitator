@@ -17,6 +17,20 @@ pub enum Environment {
     Testnet,
 }
 
+/// The settlement chain family an instance serves. It selects the provider and
+/// the chain-specific validation/parsing. NEAR is the default so existing
+/// configs parse unchanged; `eip155` (EVM) is recognized here and gains its
+/// provider + validation in a later release.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum ChainKind {
+    /// NEAR (NEP-366 signed-delegate settlement).
+    #[default]
+    Near,
+    /// EVM / eip155 (EIP-3009 `transferWithAuthorization`); implemented later.
+    Eip155,
+}
+
 impl Environment {
     pub const fn network(self) -> &'static str {
         match self {
@@ -46,6 +60,8 @@ impl Environment {
 #[allow(missing_debug_implementations)]
 pub struct ServiceConfig {
     pub environment: Environment,
+    #[serde(default)]
+    pub chain_kind: ChainKind,
     pub network: String,
     pub bind_address: SocketAddr,
     pub primary_rpc_url: Url,
@@ -169,18 +185,6 @@ impl ServiceConfig {
     // Keep launch-policy validation in one ordered, auditable sequence.
     #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), ConfigError> {
-        const MAX_INNER_GAS: u64 = 30_000_000_000_000;
-        const MAINNET_USDC: &str =
-            "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
-        const TESTNET_USDC: &str =
-            "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af";
-
-        if self.network != self.environment.network() {
-            return Err(ConfigError::Invalid(format!(
-                "network {} does not match environment {:?}",
-                self.network, self.environment
-            )));
-        }
         if self.primary_rpc_url == self.backup_rpc_url {
             return Err(ConfigError::Invalid(
                 "primary_rpc_url and backup_rpc_url must be independent".to_owned(),
@@ -227,32 +231,9 @@ impl ServiceConfig {
         ] {
             validate_unsigned_decimal(name, value)?;
         }
-        let expected_asset = match self.environment {
-            Environment::Mainnet => MAINNET_USDC,
-            Environment::Testnet => TESTNET_USDC,
-        };
-        if self.asset != expected_asset {
-            return Err(ConfigError::Invalid(format!(
-                "asset must be the canonical Circle USDC contract for {}",
-                self.network
-            )));
-        }
         if self.asset_symbol != "USDC" {
             return Err(ConfigError::Invalid(
                 "asset_symbol must be USDC for the launch policy".to_owned(),
-            ));
-        }
-        self.asset
-            .parse::<near_primitives::types::AccountId>()
-            .map_err(|error| ConfigError::Invalid(format!("invalid asset account ID: {error}")))?;
-        self.relayer_account_id
-            .parse::<near_primitives::types::AccountId>()
-            .map_err(|error| {
-                ConfigError::Invalid(format!("invalid relayer_account_id: {error}"))
-            })?;
-        if self.max_inner_gas != MAX_INNER_GAS {
-            return Err(ConfigError::Invalid(
-                "max_inner_gas must be exactly 30000000000000 for the launch policy".to_owned(),
             ));
         }
         if compare_decimal(&self.minimum_amount, "1000").is_lt() {
@@ -305,6 +286,54 @@ impl ServiceConfig {
         if self.payment_identifier.min_length != 16 || self.payment_identifier.max_length != 128 {
             return Err(ConfigError::Invalid(
                 "payment_identifier bounds must match the x402 extension (16..=128)".to_owned(),
+            ));
+        }
+        match self.chain_kind {
+            ChainKind::Near => self.validate_near(),
+            ChainKind::Eip155 => Err(ConfigError::Invalid(
+                "eip155 (EVM) settlement configuration is not yet supported".to_owned(),
+            )),
+        }
+    }
+
+    /// NEAR-specific configuration policy: network identity, the canonical USDC
+    /// contract, NEAR account-id shapes, and the sponsored-gas ceiling. The EVM
+    /// counterpart (`validate_eip155`) slots in alongside this in a later
+    /// release, selected by [`ChainKind`] in [`Self::validate`].
+    fn validate_near(&self) -> Result<(), ConfigError> {
+        const MAX_INNER_GAS: u64 = 30_000_000_000_000;
+        const MAINNET_USDC: &str =
+            "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
+        const TESTNET_USDC: &str =
+            "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af";
+
+        if self.network != self.environment.network() {
+            return Err(ConfigError::Invalid(format!(
+                "network {} does not match environment {:?}",
+                self.network, self.environment
+            )));
+        }
+        let expected_asset = match self.environment {
+            Environment::Mainnet => MAINNET_USDC,
+            Environment::Testnet => TESTNET_USDC,
+        };
+        if self.asset != expected_asset {
+            return Err(ConfigError::Invalid(format!(
+                "asset must be the canonical Circle USDC contract for {}",
+                self.network
+            )));
+        }
+        self.asset
+            .parse::<near_primitives::types::AccountId>()
+            .map_err(|error| ConfigError::Invalid(format!("invalid asset account ID: {error}")))?;
+        self.relayer_account_id
+            .parse::<near_primitives::types::AccountId>()
+            .map_err(|error| {
+                ConfigError::Invalid(format!("invalid relayer_account_id: {error}"))
+            })?;
+        if self.max_inner_gas != MAX_INNER_GAS {
+            return Err(ConfigError::Invalid(
+                "max_inner_gas must be exactly 30000000000000 for the launch policy".to_owned(),
             ));
         }
         Ok(())
@@ -513,6 +542,7 @@ mod tests {
     fn valid_mainnet_config() -> ServiceConfig {
         ServiceConfig {
             environment: Environment::Mainnet,
+            chain_kind: ChainKind::Near,
             network: MAINNET.to_owned(),
             bind_address: SocketAddr::from(([127, 0, 0, 1], 8402)),
             primary_rpc_url: Url::parse("https://rpc.mainnet.fastnear.com")
@@ -540,6 +570,46 @@ mod tests {
     #[test]
     fn accepts_launch_mainnet_policy() {
         assert!(valid_mainnet_config().validate().is_ok());
+    }
+
+    #[test]
+    fn config_document_without_chain_kind_defaults_to_near() {
+        // Host configs predate the chain_kind field; a deploy of this build must
+        // still parse them (defaulting to NEAR) or the service fails to start.
+        let document = serde_json::json!({
+            "environment": "testnet",
+            "network": "near:testnet",
+            "bind_address": "127.0.0.1:8403",
+            "primary_rpc_url": "https://rpc.testnet.fastnear.com",
+            "backup_rpc_url": "https://archival-rpc.testnet.fastnear.com",
+            "asset": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+            "asset_symbol": "USDC",
+            "minimum_amount": "1000",
+            "relayer_account_id": "x402-relayer.mike.testnet",
+            "max_inner_gas": 30_000_000_000_000_u64,
+            "database_max_connections": 10,
+            "request_limits": {
+                "body_bytes": 65536,
+                "verify_per_minute": 60,
+                "settle_per_minute": 10,
+                "verify_timeout_seconds": 15,
+                "settle_timeout_seconds": 60,
+                "max_concurrent_verify": 64
+            },
+            "sponsorship": {
+                "global_daily_yocto_near": "2000000000000000000000000",
+                "default_client_daily_yocto_near": "1000000000000000000000000",
+                "reservation_yocto_near": "10000000000000000000000",
+                "balance_warning_yocto_near": "2000000000000000000000000",
+                "balance_hard_stop_yocto_near": "500000000000000000000000"
+            },
+            "payment_identifier": { "required": false, "min_length": 16, "max_length": 128 }
+        });
+        let Ok(config) = serde_json::from_value::<ServiceConfig>(document) else {
+            std::process::abort();
+        };
+        assert_eq!(config.chain_kind, ChainKind::Near);
+        assert!(config.validate().is_ok());
     }
 
     #[test]

@@ -36,7 +36,10 @@ assert len(body["kinds"]) == 1
 kind = body["kinds"][0]
 assert kind["x402Version"] == 2
 assert kind["scheme"] == "exact"
-assert kind["network"] in {"near:testnet", "near:mainnet"}
+assert kind["network"] in {
+    "near:testnet", "near:mainnet",   # NEAR instances
+    "eip155:84532", "eip155:8453",    # Base Sepolia / Base mainnet (eip155)
+}
 assert "payment-identifier" in body["extensions"]
 assert isinstance(body["signers"], dict)
 '

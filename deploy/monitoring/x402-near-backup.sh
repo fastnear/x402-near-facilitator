@@ -17,7 +17,16 @@ bucket=x402-near-backups-341982967115
 install -d -m 0700 -o root -g root "$dest"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 push_failed=0
-for db in x402_near_mainnet x402_near_testnet; do
+# Discover every facilitator instance database (x402_near_*, and future
+# per-chain databases such as x402_base_*) rather than a fixed two-name list,
+# so a new instance is backed up as soon as its database exists.
+databases=$(sudo -u postgres psql -Atc \
+  "SELECT datname FROM pg_database WHERE datname LIKE 'x402\_%' AND datistemplate = false ORDER BY datname")
+if [ -z "$databases" ]; then
+  echo "ERROR: no x402 instance databases found to back up" >&2
+  exit 1
+fi
+for db in $databases; do
   out="$dest/${db}-${stamp}.dump"
   sudo -u postgres pg_dump -Fc "$db" > "$out"
   chmod 600 "$out"

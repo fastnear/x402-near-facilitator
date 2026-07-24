@@ -8,6 +8,7 @@
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
 pub mod auth;
+pub mod chain;
 pub mod config;
 pub mod leadership;
 pub mod protocol;

@@ -1,5 +1,6 @@
 {
   "environment": "mainnet",
+  "chain_kind": "near",
   "network": "near:mainnet",
   "bind_address": "127.0.0.1:8402",
   "primary_rpc_url": "https://rpc.mainnet.fastnear.com",
