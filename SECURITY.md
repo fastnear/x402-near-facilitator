@@ -18,8 +18,7 @@ guarantee of a fix timeline.
 
 ## Supported versions
 
-The facilitator is pre-launch and has no supported release yet. After launch,
-only the currently deployed release and the latest tagged release will receive
+Only the currently deployed release and the latest tagged release receive
 security fixes.
 
 ## Operational incidents

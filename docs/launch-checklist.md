@@ -249,3 +249,11 @@ or conversation alone is not launch evidence.
 - [ ] Repository, endpoints, release, owner, transaction evidence, current
       phase, and remaining work are added to the NEAR integrations coordination
       hub on a separate clean branch.
+
+## Post-launch decisions
+
+- [x] NEAR Intents (`assetTransferMethod: "intents"`) adoption decided —
+      2026-07-24: carried by a future mainnet-only **sibling service**,
+      never by relaxing this service's invariants; upstream spec PR
+      opened (x402-foundation/x402#2948); engineering gates G1–G5 open in
+      [near-intents-adoption-gates.md](near-intents-adoption-gates.md).

@@ -1,8 +1,12 @@
 # NEAR Intents × x402 — progress record and position (2026-07-24)
 
+> This file is the frozen 2026-07-24 record. The **living** adoption
+> decisions and engineering gates are in
+> [near-intents-adoption-gates.md](near-intents-adoption-gates.md).
+
 This document records, in one place, the NEAR Intents × x402 work completed on
 2026-07-23 and what it means for this repository. It is a **progress record and
-decision aid, not policy**: the launch boundaries in [AGENTS.md](AGENTS.md)
+decision aid, not policy**: the launch boundaries in [AGENTS.md](../AGENTS.md)
 remain authoritative for this service, and nothing below changes them. All
 claims carry their evidence — transaction links, repository pins, or file:line
 citations into this codebase.
@@ -25,7 +29,7 @@ x402 `exact` on NEAR now has three proven ways to move the same payment
 | Mechanism | NEP-366 `SignedDelegateAction` wrapping one `ft_transfer`; relayer submits | NEAR Intents Verifier (`intents.near`): payer signs an intent payload; anyone submits `execute_intents` | Agent contract holds the token and attaches the 1 yocto itself; a `pay()`-scoped function-call key authorizes |
 | Payer needs | A NEAR account holding the token + a **full-access** key | A balance inside the Verifier + any of 7 signature standards — an `erc191` EVM key pays with **no NEAR account at all** | No full-access key anywhere: a method-scoped fc-key on the agent |
 | Custody before settlement | Payer's own account | Shared Verifier ledger (blast radius = deposited balance) | The agent contract's balance, policy-capped |
-| Status | **Mainnet-live 2026-07-23** (`docs/evidence/2026-07-23-mainnet-golive.md`; the README's "pre-launch" status line predates this and lags the evidence log) | Spec amendment drafted + **$0.10 settled on mainnet** through a reference builder (§3) | Proven on testnet: direct, relayed, and against real tokens incl. Circle test USDC (§4) |
+| Status | **Mainnet-live 2026-07-23** (`evidence/2026-07-23-mainnet-golive.md`) | Spec amendment drafted + **$0.10 settled on mainnet** through a reference builder (§3) | Proven on testnet: direct, relayed, and against real tokens incl. Circle test USDC (§4) |
 | Networks | `near:testnet` + `near:mainnet` | `near:mainnet` only — **no testnet Verifier exists** | testnet (mainnet unexercised) |
 | Circle Developer-Controlled Wallets | NEAR wallet (`signDelegateAction`, NEP-461) | EVM wallet (`signMessage` emits exact `erc191` bytes — the live-proven route) | Any key holder; Circle NEAR wallet works as the scoped signer |
 
@@ -40,10 +44,10 @@ NEP-141 `ft_transfer` requires exactly 1 yoctoNEAR attached; NEAR
 function-call access keys cannot attach any deposit. Every account-based payer
 is therefore forced to a full-access key — which is precisely what this
 service's verifier enforces and documents
-([AGENTS.md:29-31](AGENTS.md); FunctionCall-key rejection and the 1-yocto
+([AGENTS.md:29-31](../AGENTS.md); FunctionCall-key rejection and the 1-yocto
 check in `verify_proto_request`,
-[crates/x402-chain-near/src/mechanism.rs:362](crates/x402-chain-near/src/mechanism.rs),
-[:381](crates/x402-chain-near/src/mechanism.rs)). The `intents` and
+[crates/x402-chain-near/src/mechanism.rs:362](../crates/x402-chain-near/src/mechanism.rs),
+[:381](../crates/x402-chain-near/src/mechanism.rs)). The `intents` and
 `exact-agent` shapes are the two structural answers: move the authorization
 into a contract's signature check (`intents.near`), or move the token into a
 contract that attaches the yocto itself (the payment agent).
@@ -160,7 +164,7 @@ plain JSON-RPC — deliberately no near-api-js).
 | Replay (mainnet) | Resubmitting the identical payload: rejected, `nonce was already used` | On-chain, per-signer single-use nonces; a facilitator needs **no nonce storage** |
 
 The run followed this repository's own funded-broadcast rule
-([AGENTS.md, Network and funds safety](AGENTS.md)): explicit human
+([AGENTS.md, Network and funds safety](../AGENTS.md)): explicit human
 confirmation of network, asset, amount, payer, recipient, and refund address
 before broadcast. The throwaway signer's seed lives in
 `~/.near-credentials/mainnet/`, outside every repository.
@@ -184,9 +188,9 @@ The same key was rejected on-chain for everything else (`MethodNameMismatch`,
 
 This facilitator **cannot and should not** serve that shape under its launch
 boundaries: it rejects FunctionCall payer permissions and requires the 1-yocto
-deposit by documented invariant ([AGENTS.md:29-31](AGENTS.md);
-[mechanism.rs:362](crates/x402-chain-near/src/mechanism.rs),
-[:381](crates/x402-chain-near/src/mechanism.rs)). That is by design — the
+deposit by documented invariant ([AGENTS.md:29-31](../AGENTS.md);
+[mechanism.rs:362](../crates/x402-chain-near/src/mechanism.rs),
+[:381](../crates/x402-chain-near/src/mechanism.rs)). That is by design — the
 relayed demo used a minimal standalone relay instead, and any first-class
 `@x402/near-agent` scheme remains a separate, deferred track.
 
@@ -194,11 +198,11 @@ relayed demo used a minimal standalone relay instead, and any first-class
 
 Assessed against the code as of `main` @ `32f815a`. The settlement seam that
 looks made for this — `NearSettlementCoordinator` + `with_settlement_coordinator`
-([crates/x402-chain-near/src/provider.rs:72-131](crates/x402-chain-near/src/provider.rs))
+([crates/x402-chain-near/src/provider.rs:72-131](../crates/x402-chain-near/src/provider.rs))
 — is **unused in production**: no caller in the service crate; the HTTP
 `/settle` path drives verify → `prepare_outer_transaction`
-([provider.rs:223](crates/x402-chain-near/src/provider.rs)) →
-`broadcast_exact` ([provider.rs:259](crates/x402-chain-near/src/provider.rs))
+([provider.rs:223](../crates/x402-chain-near/src/provider.rs)) →
+`broadcast_exact` ([provider.rs:259](../crates/x402-chain-near/src/provider.rs))
 directly. An `intents` backend is therefore not a drop-in coordinator; it
 touches every layer:
 
@@ -219,7 +223,7 @@ touches every layer:
   facilitator's account nonce now); the relayer≠payer rule becomes moot
   (the payer never appears as a NEAR transaction signer).
 - **Receipt validation** — `interpret_final_outcome`
-  ([receipt.rs:109](crates/x402-chain-near/src/receipt.rs)) enforces
+  ([receipt.rs:109](../crates/x402-chain-near/src/receipt.rs)) enforces
   tx → delegate receipt → token receipt. The intents tree is
   tx → `execute_intents` receipt → (for wallet delivery) a spawned token
   `ft_transfer` receipt that must end `SuccessValue`; for `internal`
@@ -228,7 +232,7 @@ touches every layer:
   over with the cache key = hash of the exact `signedIntent` bytes; the
   Verifier's on-chain nonce independently guarantees at-most-once execution.
 - **Config/policy** — the launch gates pin the asset to the canonical Circle
-  USDC per environment ([config.rs:174-176](crates/x402-near-facilitator/src/config.rs)),
+  USDC per environment ([config.rs:174-176](../crates/x402-near-facilitator/src/config.rs)),
   which matches; but `near:testnet` support is impossible for this method
   (no Verifier), payer policy rows would key on Verifier signer ids
   (including `0x…` implicit-Eth), and the deposit precondition changes what
@@ -280,11 +284,23 @@ Adjacent but out of scope here: the speculative CCTP V2 track
 
 ## 8. Open decisions for this repository
 
+All four were resolved on 2026-07-24; the living record is
+[near-intents-adoption-gates.md](near-intents-adoption-gates.md).
+
 1. Whether to carry `assetTransferMethod: "intents"` at all — and if so,
-   v-next here vs sibling service (§5).
+   v-next here vs sibling service (§5). — **Resolved: sibling service**;
+   this facilitator's launch invariants and testnet-first drill story
+   stay exception-free.
 2. Timing of the upstream PR for the spec amendment (the artifact this
-   service would be implementing against).
+   service would be implementing against). — **Resolved: opened
+   2026-07-24 as
+   [x402-foundation/x402#2948](https://github.com/x402-foundation/x402/pull/2948)**.
 3. Whether `/supported` should advertise transfer-method capability now
    (as `kinds[].extra`) even before any implementation, or stay silent.
-4. Housekeeping: the README status block still reads "pre-launch" while
-   `docs/evidence/2026-07-23-*-golive.md` record both go-lives.
+   — **Resolved: stay silent** until the spec merges and an
+   implementation exists; advertising unfrozen vocabulary would be a
+   claim without evidence.
+4. Housekeeping: the README status block still read "pre-launch" while
+   `evidence/2026-07-23-*-golive.md` record both go-lives. — **Resolved
+   in the same change that relocated this file** (README and SECURITY.md
+   now state go-live status with evidence links).

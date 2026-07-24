@@ -5,10 +5,14 @@ USDC on NEAR. It verifies a payer's NEP-366 signed delegate action, sponsors
 the outer transaction through a dedicated relayer, and reports success only
 after the inner NEP-141 `ft_transfer` receipt succeeds.
 
-> **Status: pre-launch.** Neither production hostname is live, no API key has
-> been issued, and no relayer or database should be considered provisioned
-> until the evidence gates in [the launch checklist](docs/launch-checklist.md)
-> are complete.
+> **Status: live.** Both production facilitators have run v0.1.3 since
+> 2026-07-23 — testnet at `test.x402.mikedotexe.com` and mainnet at
+> `x402.mikedotexe.com` — with real paid traffic through the public demo
+> workload. Evidence:
+> [testnet go-live](docs/evidence/2026-07-23-testnet-golive.md),
+> [mainnet go-live](docs/evidence/2026-07-23-mainnet-golive.md), and the
+> later entries in [docs/evidence/](docs/evidence/); gate-by-gate record
+> in [the launch checklist](docs/launch-checklist.md).
 
 ## Launch profile
 
