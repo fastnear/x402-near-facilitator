@@ -23,7 +23,6 @@ use near_primitives::action::Action;
 use near_primitives::hash::CryptoHash;
 use near_primitives::transaction::Transaction;
 use near_primitives::types::AccountId;
-use near_primitives::views::FinalExecutionOutcomeView;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
@@ -34,9 +33,8 @@ use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Instrument as _;
 use uuid::Uuid;
 use x402_chain_near::{
-    NearChainProvider, NearRpcError, RelayerStatus, TransactionLookup, VerificationFailure,
-    VerificationPolicy, decode_signed_delegate, decode_signed_transaction, interpret_final_outcome,
-    signed_delegate_hash, signed_transaction_hash, validate_final_outcome_identity,
+    VerificationFailure, VerificationPolicy, decode_signed_delegate, decode_signed_transaction,
+    signed_delegate_hash, signed_transaction_hash,
 };
 use x402_facilitator_local::FacilitatorLocal;
 use x402_types::facilitator::Facilitator;
@@ -45,7 +43,8 @@ use x402_types::scheme::SchemeRegistry;
 use crate::VERSION;
 use crate::auth::{ApiKeyAuthenticator, AuthError, AuthenticatedClient};
 use crate::chain::{
-    BroadcastOutcome, ChainProvider, SignerHead, TerminalOutcome, VerifiedDetail, VerifiedPayment,
+    BroadcastOutcome, ChainProvider, ReconcileVerdict, SignerHead, TerminalOutcome, VerifiedDetail,
+    VerifiedPayment,
 };
 use crate::config::ServiceConfig;
 use crate::leadership::ReadinessState;
@@ -109,10 +108,6 @@ impl AppState {
 
     pub fn store(&self) -> &PgStore {
         &self.store
-    }
-
-    pub fn provider(&self) -> &NearChainProvider {
-        self.provider.as_near()
     }
 
     pub fn relayer_lock(&self) -> Arc<Mutex<()>> {
@@ -1278,36 +1273,6 @@ async fn fresh_signer_head(state: &AppState) -> Result<SignerHead, StoreError> {
     Ok(head)
 }
 
-// Concrete relayer snapshot still used by the reconcile path (neutralized in the
-// reconcile increment alongside the backup-head/query/rebroadcast cluster).
-async fn fresh_relayer_status(state: &AppState) -> Result<RelayerStatus, StoreError> {
-    let status = state.provider.as_near().relayer_status().await.map_err(|_| {
-        state.readiness.set_relayer(false);
-        StoreError::Corrupt("relayer chain state is unavailable".to_owned())
-    })?;
-    let public_key = state.provider.as_near().relayer_public_key().to_string();
-    let policy_active = state
-        .store
-        .relayer_is_active(
-            &state.config.network,
-            &state.config.relayer_account_id,
-            &public_key,
-        )
-        .await?;
-    let funded = decimal_is_at_least(
-        &status.account.amount.as_yoctonear().to_string(),
-        &state.config.sponsorship.balance_hard_stop_yocto_near,
-    );
-    if !policy_active || !funded {
-        state.readiness.set_relayer(false);
-        return Err(StoreError::Corrupt(
-            "relayer policy or balance hard stop is not satisfied".to_owned(),
-        ));
-    }
-    state.readiness.set_relayer(true);
-    Ok(status)
-}
-
 async fn finalize_terminal(
     state: &AppState,
     settlement_id: Uuid,
@@ -1373,20 +1338,6 @@ async fn finalize_terminal(
             reason = metric_reason
         );
     }
-}
-
-fn execution_cost(outcome: &FinalExecutionOutcomeView) -> (u64, u128) {
-    let mut gas = outcome.transaction_outcome.outcome.gas_burnt.as_gas();
-    let mut tokens = outcome
-        .transaction_outcome
-        .outcome
-        .tokens_burnt
-        .as_yoctonear();
-    for receipt in &outcome.receipts_outcome {
-        gas = gas.saturating_add(receipt.outcome.gas_burnt.as_gas());
-        tokens = tokens.saturating_add(receipt.outcome.tokens_burnt.as_yoctonear());
-    }
-    (gas, tokens)
 }
 
 fn yocto_near_metric(value: u128) -> f64 {
@@ -1579,8 +1530,8 @@ pub async fn reconcile(state: &AppState) -> Result<(), StoreError> {
 // Recovery keeps every exact-byte/hash and dual-RPC decision adjacent.
 #[allow(clippy::too_many_lines)]
 async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Result<(), StoreError> {
-    let expected_account = state.provider.as_near().relayer_account_id().to_string();
-    let expected_public_key = state.provider.as_near().relayer_public_key().to_string();
+    let expected_account = state.provider.signer_account_id();
+    let expected_public_key = state.provider.signer_public_key();
     if record.relayer_account_id.as_deref() != Some(expected_account.as_str())
         || record.relayer_public_key.as_deref() != Some(expected_public_key.as_str())
     {
@@ -1610,62 +1561,51 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
     validate_stored_transaction(record, bytes, hash, &signer).inspect_err(|_| {
         state.readiness.set_relayer(false);
     })?;
-    let primary = state.provider.as_near().query_transaction(hash, signer.clone()).await;
-    let backup = state
+    // The provider performs the dual-RPC query, raw-outcome conflict check, and
+    // receipt interpretation, returning a neutral verdict.
+    let status = state
         .provider
-        .as_near().query_transaction_backup(hash, signer.clone())
+        .reconcile_status(&hash.to_string(), signer.as_str(), &record.payer, &record.asset)
         .await;
-    let primary_final = final_outcome(&primary);
-    let backup_final = final_outcome(&backup);
-    if final_outcomes_conflict(primary_final, backup_final) {
-        state.readiness.set_reconciliation(false);
-        return Err(StoreError::Corrupt(
-            "primary and backup RPCs returned conflicting final outcomes".to_owned(),
-        ));
-    }
-    let outcome = primary_final.or(backup_final);
-    if primary_final.is_none() && backup_final.is_some() {
+    if status.rpc_failover {
         state.metrics.record_rpc_failover("reconcile_transaction");
     }
-    if let Some(outcome) = outcome {
-        let payer = record
-            .payer
-            .parse::<AccountId>()
-            .map_err(|_| StoreError::Corrupt("journal payer is invalid".to_owned()))?;
-        let asset = record
-            .asset
-            .parse::<AccountId>()
-            .map_err(|_| StoreError::Corrupt("journal asset is invalid".to_owned()))?;
-        finalize_reconciled(state, record, outcome, &payer, &asset, hash).await?;
-        return Ok(());
-    }
-    if [primary.as_ref(), backup.as_ref()]
-        .into_iter()
-        .any(|lookup| matches!(lookup, Ok(TransactionLookup::Pending(_))))
-    {
-        return Ok(());
-    }
-    let primary_unknown = lookup_is_unknown(&primary);
-    let backup_unknown = lookup_is_unknown(&backup);
-    if !primary_unknown || !backup_unknown {
-        state.readiness.set_reconciliation(false);
-        return Err(StoreError::Corrupt(
-            "RPC ambiguity prevented settlement reconciliation".to_owned(),
-        ));
+    match status.verdict {
+        ReconcileVerdict::Conflict => {
+            state.readiness.set_reconciliation(false);
+            return Err(StoreError::Corrupt(
+                "primary and backup RPCs returned conflicting final outcomes".to_owned(),
+            ));
+        }
+        ReconcileVerdict::Terminal(outcome) => {
+            finalize_reconciled_terminal(state, record, outcome).await?;
+            return Ok(());
+        }
+        ReconcileVerdict::Indeterminate(reason) => {
+            state.readiness.set_reconciliation(false);
+            tracing::warn!(event = "reconciliation_outcome_indeterminate", reason = %reason);
+            return Ok(());
+        }
+        ReconcileVerdict::Pending => return Ok(()),
+        ReconcileVerdict::Unknown => {}
+        ReconcileVerdict::Ambiguous => {
+            state.readiness.set_reconciliation(false);
+            return Err(StoreError::Corrupt(
+                "RPC ambiguity prevented settlement reconciliation".to_owned(),
+            ));
+        }
     }
 
-    let primary_status = fresh_relayer_status(state).await?;
-    let backup_head = state.provider.as_near().backup_relayer_head().await.map_err(|_| {
+    let primary_status = fresh_signer_head(state).await?;
+    let backup_head = state.provider.backup_signer_head().await.map_err(|_| {
         StoreError::Corrupt("backup relayer state unavailable during reconciliation".to_owned())
     })?;
     let prepared_nonce = record
         .relayer_nonce
         .as_deref()
-        .and_then(|nonce| nonce.parse::<u64>().ok())
+        .and_then(|nonce| nonce.parse::<u128>().ok())
         .ok_or_else(|| StoreError::Corrupt("prepared row has invalid nonce".to_owned()))?;
-    if primary_status.access_key_nonce >= prepared_nonce
-        || backup_head.access_key_nonce >= prepared_nonce
-    {
+    if primary_status.signer_nonce >= prepared_nonce || backup_head.signer_nonce >= prepared_nonce {
         let public_key = record
             .relayer_public_key
             .as_deref()
@@ -1678,8 +1618,8 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
                 public_key,
                 "nonce advanced while exact transaction remained unknown",
                 &primary_status
-                    .access_key_nonce
-                    .max(backup_head.access_key_nonce)
+                    .signer_nonce
+                    .max(backup_head.signer_nonce)
                     .to_string(),
             )
             .await?;
@@ -1692,7 +1632,11 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
         .delegate_max_block_height
         .parse::<u64>()
         .map_err(|_| StoreError::Corrupt("journal delegate expiry is invalid".to_owned()))?;
-    if primary_status.block_height.max(backup_head.block_height) >= delegate_max_height {
+    if primary_status
+        .chain_block_height
+        .max(backup_head.chain_block_height)
+        >= delegate_max_height
+    {
         terminal_protocol_failure(
             state,
             record.id,
@@ -1712,35 +1656,33 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
             "leadership lost before reconciliation broadcast".to_owned(),
         ));
     }
-    let current_primary = fresh_relayer_status(state).await?;
-    let current_backup = state.provider.as_near().backup_relayer_head().await.map_err(|_| {
+    let current_primary = fresh_signer_head(state).await?;
+    let current_backup = state.provider.backup_signer_head().await.map_err(|_| {
         StoreError::Corrupt("backup relayer state unavailable before rebroadcast".to_owned())
     })?;
-    if current_primary.access_key_nonce != primary_status.access_key_nonce
-        || current_backup.access_key_nonce != backup_head.access_key_nonce
+    if current_primary.signer_nonce != primary_status.signer_nonce
+        || current_backup.signer_nonce != backup_head.signer_nonce
     {
         state.readiness.set_relayer(false);
         return Err(StoreError::Corrupt(
             "relayer nonce changed before exact-byte rebroadcast".to_owned(),
         ));
     }
-    match state.provider.as_near().broadcast_exact(bytes).await {
-        Ok(TransactionLookup::Final(outcome)) => {
-            let payer = record
-                .payer
-                .parse::<AccountId>()
-                .map_err(|_| StoreError::Corrupt("journal payer is invalid".to_owned()))?;
-            let asset = record
-                .asset
-                .parse::<AccountId>()
-                .map_err(|_| StoreError::Corrupt("journal asset is invalid".to_owned()))?;
-            finalize_reconciled(state, record, &outcome, &payer, &asset, hash).await?;
+    match state
+        .provider
+        .rebroadcast(bytes, &hash.to_string(), &record.payer, &record.asset)
+        .await
+    {
+        BroadcastOutcome::Terminal(outcome) => {
+            finalize_reconciled_terminal(state, record, outcome).await?;
         }
-        Err(NearRpcError::TransactionRejected) => {
+        BroadcastOutcome::Rejected(_) => {
             terminal_transaction_rejected(state, record.id, Some(record.payer.clone()), hash.to_string())
                 .await;
         }
-        Ok(TransactionLookup::Pending(_) | TransactionLookup::Unknown) | Err(_) => {}
+        // Still in flight (or an indeterminate final): stay submitted; the outer
+        // reconcile loop recomputes readiness from the remaining nonterminal set.
+        BroadcastOutcome::Pending => {}
     }
     Ok(())
 }
@@ -1829,91 +1771,43 @@ fn validate_stored_transaction(
     Ok(())
 }
 
-fn lookup_is_unknown(lookup: &Result<TransactionLookup, NearRpcError>) -> bool {
-    matches!(
-        lookup,
-        Ok(TransactionLookup::Unknown) | Err(NearRpcError::TransactionUnknown)
-    )
-}
-
-fn final_outcome(
-    lookup: &Result<TransactionLookup, NearRpcError>,
-) -> Option<&FinalExecutionOutcomeView> {
-    match lookup {
-        Ok(TransactionLookup::Final(outcome)) => Some(outcome.as_ref()),
-        Ok(TransactionLookup::Unknown | TransactionLookup::Pending(_)) | Err(_) => None,
-    }
-}
-
-fn final_outcomes_conflict<T: Eq>(primary: Option<&T>, backup: Option<&T>) -> bool {
-    matches!((primary, backup), (Some(primary), Some(backup)) if primary != backup)
-}
-
 fn can_reconciliation_broadcast(state: &AppState) -> bool {
     let snapshot = state.readiness.snapshot();
     snapshot.leadership && snapshot.rpc && snapshot.relayer
 }
 
-async fn finalize_reconciled(
+async fn finalize_reconciled_terminal(
     state: &AppState,
     record: &SettlementRecord,
-    outcome: &FinalExecutionOutcomeView,
-    payer: &AccountId,
-    asset: &AccountId,
-    transaction_hash: CryptoHash,
+    outcome: TerminalOutcome,
 ) -> Result<(), StoreError> {
-    if let Err(error) = validate_final_outcome_identity(
-        outcome,
-        transaction_hash,
-        &state.provider.as_near().relayer_account_id(),
-        payer,
-    ) {
-        state.readiness.set_reconciliation(false);
-        tracing::warn!(
-            event = "reconciliation_outcome_identity_indeterminate",
-            reason = %error
-        );
-        return Ok(());
-    }
-    let (gas_burnt, tokens_burnt) = execution_cost(outcome);
-    let transaction = transaction_hash.to_string();
-    let (settlement_state, response, error_code) =
-        match interpret_final_outcome(outcome, payer, asset) {
-            Ok(_) => (
-                SettlementState::Succeeded,
-                SettleResponse::success(
-                    payer.to_string(),
-                    transaction,
-                    state.config.network.clone(),
-                ),
-                None,
+    let (settlement_state, response, error_code) = if outcome.success {
+        (
+            SettlementState::Succeeded,
+            SettleResponse::success(
+                record.payer.clone(),
+                outcome.tx_hash.clone(),
+                state.config.network.clone(),
             ),
-            Err(error) if error.is_definitive_failure() => (
-                SettlementState::Failed,
-                SettleResponse::failure(
-                    "transaction_failed",
-                    Some(error.to_string()),
-                    Some(payer.to_string()),
-                    transaction,
-                    state.config.network.clone(),
-                ),
-                Some("transaction_failed".to_owned()),
+            None,
+        )
+    } else {
+        (
+            SettlementState::Failed,
+            SettleResponse::failure(
+                "transaction_failed",
+                outcome.failure_detail.clone(),
+                Some(record.payer.clone()),
+                outcome.tx_hash.clone(),
+                state.config.network.clone(),
             ),
-            Err(error) => {
-                state.readiness.set_reconciliation(false);
-                tracing::warn!(
-                    event = "reconciliation_receipt_indeterminate",
-                    reason = %error
-                );
-                return Ok(());
-            }
-        };
-    let (metric_result, metric_reason) = match settlement_state {
-        SettlementState::Succeeded => ("succeeded", "success"),
-        SettlementState::Failed => ("failed", "transaction_failed"),
-        SettlementState::Reserved | SettlementState::Prepared | SettlementState::Submitted => {
-            ("failed", "invalid_terminal_state")
-        }
+            Some("transaction_failed".to_owned()),
+        )
+    };
+    let (metric_result, metric_reason) = if outcome.success {
+        ("succeeded", "success")
+    } else {
+        ("failed", "transaction_failed")
     };
     let bytes =
         serde_json::to_vec(&response).map_err(|error| StoreError::Corrupt(error.to_string()))?;
@@ -1926,14 +1820,14 @@ async fn finalize_reconciled(
             response_bytes: bytes,
             error_code,
             error_detail: None,
-            gas_burnt: Some(gas_burnt.to_string()),
-            tokens_burnt: Some(tokens_burnt.to_string()),
-            actual_yocto_near: tokens_burnt.to_string(),
+            gas_burnt: Some(outcome.gas_units.to_string()),
+            tokens_burnt: Some(outcome.fee_atomic.to_string()),
+            actual_yocto_near: outcome.fee_atomic.to_string(),
         })
         .await?;
     state
         .metrics
-        .record_settlement_cost(gas_burnt, yocto_near_metric(tokens_burnt));
+        .record_settlement_cost(outcome.gas_units, yocto_near_metric(outcome.fee_atomic));
     state
         .metrics
         .record_settlement_result(metric_result, metric_reason);
@@ -2052,13 +1946,6 @@ mod tests {
     #[test]
     fn signed_delegate_decoder_is_linked_into_service_boundary() {
         assert!(x402_chain_near::decode_signed_delegate("not-base64").is_err());
-    }
-
-    #[test]
-    fn conflicting_final_results_fail_closed() {
-        assert!(!final_outcomes_conflict(Some(&1_u8), Some(&1_u8)));
-        assert!(final_outcomes_conflict(Some(&1_u8), Some(&2_u8)));
-        assert!(!final_outcomes_conflict(Some(&1_u8), None));
     }
 
     #[tokio::test(flavor = "current_thread")]

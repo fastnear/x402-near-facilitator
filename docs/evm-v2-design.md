@@ -109,6 +109,39 @@ The NEAR-specific **nonce-quarantine** (`service.rs:1222-1243`) and
 implements and the EVM impl no-ops (EVM exactly-once is the on-chain EIP-3009
 nonce; reorg is handled by confirmation depth, below).
 
+### As built (Phase 0, increments 1–2)
+
+The neutral seam shipped as a `ChainProvider` enum (not `dyn`), and the engine in
+`service.rs` now speaks only these methods — the `as_near()` bridge is gone from
+the engine (it remains solely as a test accessor for staging journal fixtures):
+
+- `verify(&VerifyRequest, &VerificationPolicy) -> Result<VerifiedPayment, VerifyRejection>`;
+  `VerifyRejection { reason: &'static str, rpc_ambiguous: bool }`.
+- `signer_head()` / `backup_signer_head() -> Result<SignerHead, NearRpcError>`
+  (backup carries height + nonce only; balance is unused there).
+- `prepare(&VerifiedPayment, &SignerHead) -> Result<Prepared, PrepareError>`.
+- `broadcast(&Prepared, &VerifiedPayment) -> BroadcastOutcome`.
+- `reconcile_status(submit_hash, signer, payer, asset) -> ReconcileStatus`
+  and `rebroadcast(bytes, submit_hash, payer, asset) -> BroadcastOutcome`.
+- `readiness_probe() -> bool`, `signer_account_id()`, `signer_public_key()`.
+
+**Decision — dual-RPC + conflict live in the provider.** Rather than the engine
+calling `query_status` twice and comparing, `reconcile_status` performs both RPC
+queries, compares the two *raw* final outcomes for integrity, and interprets the
+receipt graph, returning one neutral `ReconcileStatus { verdict, rpc_failover }`
+(`verdict`: Terminal | Indeterminate | Pending | Unknown | Conflict | Ambiguous).
+Rationale: NEAR's byte-for-byte raw-outcome equality is the integrity check we
+must preserve exactly in Phase 0, and comparing *interpreted* neutral outcomes
+would subtly weaken it; EVM's cross-check is confirmation-depth, also provider
+-specific. `validate_stored_transaction` stays in the engine for now (it is a
+pure function over the record + bytes, not a bridge user); it moves behind the
+provider when the EVM RLP/EIP-3009 validator lands in Phase 1.
+
+The identity-mismatch and receipt-indeterminate tracing events collapse to a
+single `*_indeterminate` event carrying the reason; the settlement stays
+submitted and the outer reconcile loop recomputes readiness from the remaining
+nonterminal set, so the final readiness state is unchanged.
+
 ## EVM settlement specifics (Phase 1)
 
 - **verify**: reuse `x402-chain-eip155`'s `V2Eip155Exact` handler wholesale

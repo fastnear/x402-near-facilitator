@@ -32,13 +32,9 @@ pub enum ChainProvider {
 }
 
 impl ChainProvider {
-    /// Borrow the inner NEAR provider.
-    ///
-    /// Transitional bridge for Phase 0: the settlement engine still calls
-    /// `NearChainProvider`'s inherent methods through this accessor while the
-    /// neutral method surface is migrated cluster by cluster. Each call site is
-    /// replaced by a neutral [`ChainProvider`] method before the `Evm` variant
-    /// lands, at which point this accessor is removed.
+    /// Borrow the inner NEAR provider. The settlement engine speaks only neutral
+    /// [`ChainProvider`] methods; this accessor exists for tests that drive the
+    /// concrete `NearChainProvider` directly to stage journal fixtures.
     #[must_use]
     pub fn as_near(&self) -> &NearChainProvider {
         let Self::Near(provider) = self;
@@ -186,13 +182,18 @@ impl ChainProvider {
                 {
                     Ok(TransactionLookup::Final(outcome)) => {
                         let VerifiedDetail::Near(near_payment) = &payment.detail;
-                        interpret_near_terminal(
+                        match interpret_near_final(
                             &outcome,
                             near_prepared.transaction_hash,
                             &provider.relayer_account_id(),
                             &near_payment.payer,
                             &near_payment.requirements.asset,
-                        )
+                        ) {
+                            NearInterpretation::Terminal(terminal) => {
+                                BroadcastOutcome::Terminal(terminal)
+                            }
+                            NearInterpretation::Indeterminate(_) => BroadcastOutcome::Pending,
+                        }
                     }
                     Err(NearRpcError::TransactionRejected) => {
                         BroadcastOutcome::Rejected("transaction_rejected".to_owned())
@@ -202,6 +203,136 @@ impl ChainProvider {
                     }
                 }
             }
+        }
+    }
+
+    /// Reconcile a submitted transaction against both configured RPCs, returning
+    /// a neutral verdict. The NEAR impl compares the two *raw* final outcomes for
+    /// integrity (honest RPCs must agree byte-for-byte on a finalized
+    /// transaction) and then validates identity + receipt graph, so the engine
+    /// never sees NEAR primitives. `rpc_failover` reports that the backup RPC
+    /// supplied a final outcome the primary did not. (EVM's variant applies the
+    /// confirmation-depth policy instead of raw-outcome equality.)
+    pub async fn reconcile_status(
+        &self,
+        submit_hash: &str,
+        signer: &str,
+        payer: &str,
+        asset: &str,
+    ) -> ReconcileStatus {
+        match self {
+            Self::Near(provider) => {
+                let (Ok(hash), Ok(signer_id), Ok(payer_id), Ok(asset_id)) = (
+                    submit_hash.parse::<CryptoHash>(),
+                    signer.parse::<AccountId>(),
+                    payer.parse::<AccountId>(),
+                    asset.parse::<AccountId>(),
+                ) else {
+                    return ReconcileStatus::verdict(ReconcileVerdict::Ambiguous);
+                };
+                let primary = provider.query_transaction(hash, signer_id.clone()).await;
+                let backup = provider.query_transaction_backup(hash, signer_id).await;
+                let primary_final = near_final_outcome(&primary);
+                let backup_final = near_final_outcome(&backup);
+                if final_outcomes_conflict(primary_final, backup_final) {
+                    return ReconcileStatus::verdict(ReconcileVerdict::Conflict);
+                }
+                let rpc_failover = primary_final.is_none() && backup_final.is_some();
+                if let Some(outcome) = primary_final.or(backup_final) {
+                    let verdict = match interpret_near_final(
+                        outcome,
+                        hash,
+                        &provider.relayer_account_id(),
+                        &payer_id,
+                        &asset_id,
+                    ) {
+                        NearInterpretation::Terminal(terminal) => {
+                            ReconcileVerdict::Terminal(terminal)
+                        }
+                        NearInterpretation::Indeterminate(reason) => {
+                            ReconcileVerdict::Indeterminate(reason)
+                        }
+                    };
+                    return ReconcileStatus {
+                        verdict,
+                        rpc_failover,
+                    };
+                }
+                if [primary.as_ref(), backup.as_ref()]
+                    .into_iter()
+                    .any(|lookup| matches!(lookup, Ok(TransactionLookup::Pending(_))))
+                {
+                    return ReconcileStatus::verdict(ReconcileVerdict::Pending);
+                }
+                if near_lookup_unknown(&primary) && near_lookup_unknown(&backup) {
+                    return ReconcileStatus::verdict(ReconcileVerdict::Unknown);
+                }
+                ReconcileStatus::verdict(ReconcileVerdict::Ambiguous)
+            }
+        }
+    }
+
+    /// A signer/chain-head snapshot from the *backup* RPC, for the dual-RPC nonce
+    /// and expiry cross-checks during recovery. Carries height and nonce only;
+    /// balance is not observed from the backup head (`signer_balance_atomic` is
+    /// zero and unused by the recovery cross-checks).
+    pub async fn backup_signer_head(&self) -> Result<SignerHead, NearRpcError> {
+        match self {
+            Self::Near(provider) => {
+                let head = provider.backup_relayer_head().await?;
+                Ok(SignerHead {
+                    chain_block_height: head.block_height,
+                    chain_block_ref: head.block_hash.to_string(),
+                    signer_nonce: u128::from(head.access_key_nonce),
+                    signer_id: provider.relayer_account_id().to_string(),
+                    signer_public_key: provider.relayer_public_key().to_string(),
+                    signer_balance_atomic: 0,
+                })
+            }
+        }
+    }
+
+    /// Rebroadcast the exact durable submission bytes during recovery and
+    /// classify the outcome, reusing the same interpretation as
+    /// [`Self::broadcast`]. Never re-signs: the journaled bytes and their
+    /// deterministic hash are replayed unchanged.
+    pub async fn rebroadcast(
+        &self,
+        submit_bytes: &[u8],
+        submit_hash: &str,
+        payer: &str,
+        asset: &str,
+    ) -> BroadcastOutcome {
+        match self {
+            Self::Near(provider) => match provider.broadcast_exact(submit_bytes).await {
+                Ok(TransactionLookup::Final(outcome)) => {
+                    let (Ok(hash), Ok(payer_id), Ok(asset_id)) = (
+                        submit_hash.parse::<CryptoHash>(),
+                        payer.parse::<AccountId>(),
+                        asset.parse::<AccountId>(),
+                    ) else {
+                        return BroadcastOutcome::Pending;
+                    };
+                    match interpret_near_final(
+                        &outcome,
+                        hash,
+                        &provider.relayer_account_id(),
+                        &payer_id,
+                        &asset_id,
+                    ) {
+                        NearInterpretation::Terminal(terminal) => {
+                            BroadcastOutcome::Terminal(terminal)
+                        }
+                        NearInterpretation::Indeterminate(_) => BroadcastOutcome::Pending,
+                    }
+                }
+                Err(NearRpcError::TransactionRejected) => {
+                    BroadcastOutcome::Rejected("transaction_rejected".to_owned())
+                }
+                Ok(TransactionLookup::Pending(_) | TransactionLookup::Unknown) | Err(_) => {
+                    BroadcastOutcome::Pending
+                }
+            },
         }
     }
 }
@@ -420,24 +551,72 @@ pub enum PrepareError {
     Provider(NearRpcError),
 }
 
+/// The neutral verdict from reconciling a submission against both RPCs.
+#[derive(Debug)]
+pub struct ReconcileStatus {
+    /// Where the submission sits after cross-checking primary and backup.
+    pub verdict: ReconcileVerdict,
+    /// Whether the backup RPC supplied a final outcome the primary did not.
+    pub rpc_failover: bool,
+}
+
+impl ReconcileStatus {
+    /// A verdict with no RPC failover (the common case for every branch that
+    /// does not consult a backup-only final outcome).
+    #[must_use]
+    fn verdict(verdict: ReconcileVerdict) -> Self {
+        Self {
+            verdict,
+            rpc_failover: false,
+        }
+    }
+}
+
+/// The lifecycle position a reconciliation observed for a submitted transaction.
+#[derive(Debug)]
+pub enum ReconcileVerdict {
+    /// An authoritative terminal outcome (identity + receipt graph validated).
+    Terminal(TerminalOutcome),
+    /// A final outcome exists but is not authoritative (identity mismatch or a
+    /// non-definitive receipt); stay submitted and retry. Carries the reason.
+    Indeterminate(String),
+    /// At least one RPC reports the submission pending; wait.
+    Pending,
+    /// Both RPCs report no record; proceed to recovery (nonce/expiry/rebroadcast).
+    Unknown,
+    /// Primary and backup disagree on a final outcome; integrity fault.
+    Conflict,
+    /// Neither final, pending, nor both-unknown; RPC ambiguity, integrity fault.
+    Ambiguous,
+}
+
+/// The interpretation of a NEAR final outcome, shared by broadcast, rebroadcast,
+/// and reconcile so all three classify identically.
+enum NearInterpretation {
+    /// An authoritative success or definitive failure.
+    Terminal(TerminalOutcome),
+    /// Identity mismatch or a non-authoritative receipt; carries the reason.
+    Indeterminate(String),
+}
+
 /// Bind a NEAR final outcome to the prepared transaction and interpret its
-/// receipt graph into a neutral terminal outcome. Identity mismatch or a
-/// non-authoritative (indeterminate) receipt state yields
-/// [`BroadcastOutcome::Pending`] so the submission stays for reconciliation;
-/// only an authoritative success or definitive failure is terminal.
-fn interpret_near_terminal(
+/// receipt graph. Identity mismatch or a non-authoritative (indeterminate)
+/// receipt state yields [`NearInterpretation::Indeterminate`] (the caller keeps
+/// the submission for reconciliation); only an authoritative success or
+/// definitive failure is [`NearInterpretation::Terminal`].
+fn interpret_near_final(
     outcome: &FinalExecutionOutcomeView,
     transaction_hash: CryptoHash,
     signer: &AccountId,
     payer: &AccountId,
     asset: &AccountId,
-) -> BroadcastOutcome {
-    if validate_final_outcome_identity(outcome, transaction_hash, signer, payer).is_err() {
-        return BroadcastOutcome::Pending;
+) -> NearInterpretation {
+    if let Err(error) = validate_final_outcome_identity(outcome, transaction_hash, signer, payer) {
+        return NearInterpretation::Indeterminate(error.to_string());
     }
     let (gas_units, fee_atomic) = execution_cost_near(outcome);
     match interpret_final_outcome(outcome, payer, asset) {
-        Ok(_) => BroadcastOutcome::Terminal(TerminalOutcome {
+        Ok(_) => NearInterpretation::Terminal(TerminalOutcome {
             success: true,
             tx_hash: transaction_hash.to_string(),
             recipient_delta_atomic: None,
@@ -446,7 +625,7 @@ fn interpret_near_terminal(
             failure_detail: None,
         }),
         Err(error) if error.is_definitive_failure() => {
-            BroadcastOutcome::Terminal(TerminalOutcome {
+            NearInterpretation::Terminal(TerminalOutcome {
                 success: false,
                 tx_hash: transaction_hash.to_string(),
                 recipient_delta_atomic: None,
@@ -455,7 +634,43 @@ fn interpret_near_terminal(
                 failure_detail: Some(error.to_string()),
             })
         }
-        Err(_) => BroadcastOutcome::Pending,
+        Err(error) => NearInterpretation::Indeterminate(error.to_string()),
+    }
+}
+
+/// The raw final outcome from a NEAR transaction lookup, if present.
+fn near_final_outcome(
+    lookup: &Result<TransactionLookup, NearRpcError>,
+) -> Option<&FinalExecutionOutcomeView> {
+    match lookup {
+        Ok(TransactionLookup::Final(outcome)) => Some(outcome.as_ref()),
+        Ok(TransactionLookup::Unknown | TransactionLookup::Pending(_)) | Err(_) => None,
+    }
+}
+
+/// Whether a NEAR transaction lookup authoritatively reports "no such record".
+fn near_lookup_unknown(lookup: &Result<TransactionLookup, NearRpcError>) -> bool {
+    matches!(
+        lookup,
+        Ok(TransactionLookup::Unknown) | Err(NearRpcError::TransactionUnknown)
+    )
+}
+
+/// Two RPCs conflict when both report a final outcome and the outcomes differ.
+/// A finalized transaction is deterministic, so honest RPCs must agree.
+fn final_outcomes_conflict<T: Eq>(primary: Option<&T>, backup: Option<&T>) -> bool {
+    matches!((primary, backup), (Some(primary), Some(backup)) if primary != backup)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::final_outcomes_conflict;
+
+    #[test]
+    fn conflicting_final_results_fail_closed() {
+        assert!(!final_outcomes_conflict(Some(&1_u8), Some(&1_u8)));
+        assert!(final_outcomes_conflict(Some(&1_u8), Some(&2_u8)));
+        assert!(!final_outcomes_conflict(Some(&1_u8), None));
     }
 }
 
