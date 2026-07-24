@@ -348,9 +348,14 @@ Host-state boxes verified live 2026-07-24
       public testnet settles and two mainnet settles with replay and
       conflict proofs
       ([evidence](evidence/2026-07-23-real-traffic-and-recovery.md))
-- [ ] Repository, endpoints, release, owner, transaction evidence, current
+- [x] Repository, endpoints, release, owner, transaction evidence, current
       phase, and remaining work are added to the NEAR integrations coordination
-      hub on a separate clean branch.
+      hub on a separate clean branch. — 2026-07-24: folded into hub Program 04
+      (Source-and-evidence-map row + Current-state clause) on branch
+      `facilitator-hub-entry`; `check.py` regression-free (the pre-existing
+      failures are the parallel workstream's moved worktrees, left untouched).
+      Canonical integration into the hub's working branch is the coordination
+      workstream's to merge.
 
 ## Post-launch decisions
 
