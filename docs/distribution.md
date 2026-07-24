@@ -1,7 +1,9 @@
 # Distribution: registry submissions (prepared, not sent)
 
-Everything below is staged and ready to fire; **nothing has been
-submitted**. Each submission is a deliberate operator action. The NEAR
+Status: the three PR-based submissions are **open** (foundation #2941,
+awesome-agentic-commerce #510, x402facilitators #15) and the x402scan
+feature request is filed (#1040). Remaining operator actions: the NEAR
+Catalog form and watching the open PRs for maintainer feedback. The NEAR
 integrations coordination hub entry (launch-checklist gate 3) is parked
 separately.
 
@@ -50,8 +52,7 @@ separately.
 - Upstream: `x402-foundation/x402`, file `docs/dev-tools/facilitators.md`.
 - Staged branch (based on clean upstream `main`):
   <https://github.com/mikedotexe/x402/tree/x402-near-facilitator-listing>
-- Open the PR from
-  <https://github.com/x402-foundation/x402/compare/main...mikedotexe:x402:x402-near-facilitator-listing>
+- **PR opened 2026-07-23:** <https://github.com/x402-foundation/x402/pull/2941>
 - Entry added (alphabetical position):
   `| [NEAR x402 Facilitator](https://x402.mikedotexe.com/supported) |
   Independent facilitator for NEAR mainnet and testnet; NEP-141 USDC
@@ -74,8 +75,7 @@ separately.
   "Facilitators & Networks" section.
 - Staged branch:
   <https://github.com/mikedotexe/awesome-agentic-commerce/tree/x402-near-facilitator-listing>
-- Open the PR from
-  <https://github.com/Merit-Systems/awesome-agentic-commerce/compare/main...mikedotexe:awesome-agentic-commerce:x402-near-facilitator-listing>
+- **PR opened 2026-07-23:** <https://github.com/Merit-Systems/awesome-agentic-commerce/pull/510>
 
 ### 5. x402.watch / @swader/x402facilitators — facilitator directory (PR)
 
@@ -85,8 +85,7 @@ separately.
 - Staged branch (adds `Network.NEAR`, the NEP-141 USDC token constant,
   explorer/icon wiring, and our entry; `tsc --noEmit` clean):
   <https://github.com/mikedotexe/x402facilitators/tree/x402-near-facilitator-listing>
-- Open the PR from
-  <https://github.com/Swader/x402facilitators/compare/main...mikedotexe:x402facilitators:x402-near-facilitator-listing>
+- **PR opened 2026-07-23:** <https://github.com/Swader/x402facilitators/pull/15>
 - The entry's logo references
   `docs/assets/near-x402-facilitator.svg` in this repository (must be on
   `main` before the PR is opened).
