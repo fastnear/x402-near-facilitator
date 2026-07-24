@@ -11,7 +11,33 @@
 
 use std::fmt;
 
-use x402_chain_near::{PreparedTransaction as NearPrepared, VerifiedPayment as NearVerified};
+use x402_chain_near::{
+    NearChainProvider, PreparedTransaction as NearPrepared, VerifiedPayment as NearVerified,
+};
+
+/// The settlement provider for the environment's chain. A closed enum (rather
+/// than `dyn`) so the engine can hold one `Arc<ChainProvider>` and dispatch
+/// inward with neutral value types. Phase 0 wraps NEAR; Phase 1 adds `Evm`.
+#[derive(Debug)]
+pub enum ChainProvider {
+    /// A NEAR delegate-settlement provider.
+    Near(NearChainProvider),
+}
+
+impl ChainProvider {
+    /// Borrow the inner NEAR provider.
+    ///
+    /// Transitional bridge for Phase 0: the settlement engine still calls
+    /// `NearChainProvider`'s inherent methods through this accessor while the
+    /// neutral method surface is migrated cluster by cluster. Each call site is
+    /// replaced by a neutral [`ChainProvider`] method before the `Evm` variant
+    /// lands, at which point this accessor is removed.
+    #[must_use]
+    pub fn as_near(&self) -> &NearChainProvider {
+        let Self::Near(provider) = self;
+        provider
+    }
+}
 
 /// The exact-scheme requirements a payment was verified against, in neutral
 /// (string / atomic-unit) form for logging and cross-checks.

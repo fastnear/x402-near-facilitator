@@ -46,6 +46,7 @@ use x402_types::scheme::{SchemeBlueprints, SchemeConfig, SchemeRegistry};
 use super::{AppState, router};
 use crate::VERSION;
 use crate::auth::{ApiKeyAuthenticator, digest_api_key};
+use crate::chain::ChainProvider;
 use crate::config::{
     Environment, PaymentIdentifierConfig, RequestLimits, ServiceConfig, SponsorshipConfig,
 };
@@ -378,7 +379,7 @@ fn build_application(store: PgStore, metrics: Metrics) -> TestResult<TestApplica
         store,
         auth,
         facilitator,
-        provider,
+        ChainProvider::Near(provider),
         readiness.clone(),
         metrics,
     );

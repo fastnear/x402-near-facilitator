@@ -11,6 +11,7 @@ use near_primitives::types::AccountId;
 use x402_chain_near::{JsonRpcNearRpc, NearChainProvider, NearNetwork, NearRpc, V2NearExact};
 use x402_facilitator_local::{FacilitatorLocal, util::SigDown};
 use x402_near_facilitator::auth::ApiKeyAuthenticator;
+use x402_near_facilitator::chain::ChainProvider;
 use x402_near_facilitator::config::{Environment, OtelConfig, SecretFiles, ServiceConfig};
 use x402_near_facilitator::leadership::{LeadershipHandle, ReadinessState};
 use x402_near_facilitator::service::{AppState, reconcile, router};
@@ -101,7 +102,7 @@ async fn main() -> Result<()> {
         store.clone(),
         auth,
         facilitator,
-        provider.clone(),
+        ChainProvider::Near(provider.clone()),
         readiness.clone(),
         telemetry.metrics(),
     );

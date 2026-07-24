@@ -45,6 +45,7 @@ use x402_types::scheme::SchemeRegistry;
 
 use crate::VERSION;
 use crate::auth::{ApiKeyAuthenticator, AuthError, AuthenticatedClient};
+use crate::chain::ChainProvider;
 use crate::config::ServiceConfig;
 use crate::leadership::ReadinessState;
 use crate::protocol::{
@@ -67,7 +68,7 @@ pub struct AppState {
     store: PgStore,
     auth: ApiKeyAuthenticator,
     facilitator: Arc<FacilitatorLocal<SchemeRegistry>>,
-    provider: Arc<NearChainProvider>,
+    provider: Arc<ChainProvider>,
     readiness: ReadinessState,
     rates: Arc<RateLimiter>,
     verify_slots: Arc<Semaphore>,
@@ -82,7 +83,7 @@ impl AppState {
         store: PgStore,
         auth: ApiKeyAuthenticator,
         facilitator: FacilitatorLocal<SchemeRegistry>,
-        provider: NearChainProvider,
+        provider: ChainProvider,
         readiness: ReadinessState,
         metrics: Metrics,
     ) -> Self {
@@ -110,7 +111,7 @@ impl AppState {
     }
 
     pub fn provider(&self) -> &NearChainProvider {
-        &self.provider
+        self.provider.as_near()
     }
 
     pub fn relayer_lock(&self) -> Arc<Mutex<()>> {
@@ -127,22 +128,22 @@ impl AppState {
             crate::config::Environment::Testnet => "testnet",
         };
         let rpc_ready = matches!(
-            self.provider.rpc_network_id().await,
+            self.provider.as_near().rpc_network_id().await,
             Ok(network) if network == expected_chain_id
         ) && matches!(
-            self.provider.backup_rpc_network_id().await,
+            self.provider.as_near().backup_rpc_network_id().await,
             Ok(network) if network == expected_chain_id
-        ) && self.provider.rpc_final_block().await.is_ok()
-            && self.provider.backup_rpc_final_block().await.is_ok();
+        ) && self.provider.as_near().rpc_final_block().await.is_ok()
+            && self.provider.as_near().backup_rpc_final_block().await.is_ok();
         self.readiness.set_rpc(rpc_ready);
 
-        let relayer_status = self.provider.relayer_status().await;
+        let relayer_status = self.provider.as_near().relayer_status().await;
         let policy_active = self
             .store
             .relayer_is_active(
                 &self.config.network,
                 &self.config.relayer_account_id,
-                &self.provider.relayer_public_key().to_string(),
+                &self.provider.as_near().relayer_public_key().to_string(),
             )
             .await
             .unwrap_or(false);
@@ -693,7 +694,7 @@ async fn settle_inner(state: &AppState, request: Request) -> Response {
     let policy = VerificationPolicy {
         max_sponsored_gas: state.config.max_inner_gas,
     };
-    let verified = match state.provider.verify(&parsed.raw, &policy).await {
+    let verified = match state.provider.as_near().verify(&parsed.raw, &policy).await {
         Ok(verified) => verified,
         Err(failure) if verification_is_rpc_ambiguous(failure) => {
             if let Some(response) = prior_settlement_race_response(
@@ -1160,7 +1161,7 @@ async fn run_new_settlement(
     let policy = VerificationPolicy {
         max_sponsored_gas: state.config.max_inner_gas,
     };
-    let payment = match state.provider.verify(&request, &policy).await {
+    let payment = match state.provider.as_near().verify(&request, &policy).await {
         Ok(payment) => payment,
         Err(failure) if verification_is_rpc_ambiguous(failure) => {
             terminal_service_failure(
@@ -1194,7 +1195,7 @@ async fn run_new_settlement(
     };
     let Ok(prepared) = state
         .provider
-        .prepare_outer_transaction(&payment, relayer_head)
+        .as_near().prepare_outer_transaction(&payment, relayer_head)
     else {
         terminal_service_failure(
             &state,
@@ -1225,7 +1226,7 @@ async fn run_new_settlement(
         return;
     };
     if current_relayer.access_key_nonce != relayer_status.access_key_nonce {
-        let public_key = state.provider.relayer_public_key().to_string();
+        let public_key = state.provider.as_near().relayer_public_key().to_string();
         let _quarantine = state
             .store
             .quarantine_relayer(
@@ -1263,7 +1264,7 @@ async fn run_new_settlement(
     }
     let lookup = state
         .provider
-        .broadcast_exact(prepared.signed_transaction_bytes())
+        .as_near().broadcast_exact(prepared.signed_transaction_bytes())
         .await;
     match lookup {
         Ok(TransactionLookup::Final(outcome)) => {
@@ -1294,11 +1295,11 @@ async fn run_new_settlement(
 }
 
 async fn fresh_relayer_status(state: &AppState) -> Result<RelayerStatus, StoreError> {
-    let status = state.provider.relayer_status().await.map_err(|_| {
+    let status = state.provider.as_near().relayer_status().await.map_err(|_| {
         state.readiness.set_relayer(false);
         StoreError::Corrupt("relayer chain state is unavailable".to_owned())
     })?;
-    let public_key = state.provider.relayer_public_key().to_string();
+    let public_key = state.provider.as_near().relayer_public_key().to_string();
     let policy_active = state
         .store
         .relayer_is_active(
@@ -1331,7 +1332,7 @@ async fn finalize_outcome(
     if let Err(error) = validate_final_outcome_identity(
         outcome,
         transaction_hash,
-        &state.provider.relayer_account_id(),
+        &state.provider.as_near().relayer_account_id(),
         &payment.payer,
     ) {
         state.readiness.set_reconciliation(false);
@@ -1618,8 +1619,8 @@ pub async fn reconcile(state: &AppState) -> Result<(), StoreError> {
 // Recovery keeps every exact-byte/hash and dual-RPC decision adjacent.
 #[allow(clippy::too_many_lines)]
 async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Result<(), StoreError> {
-    let expected_account = state.provider.relayer_account_id().to_string();
-    let expected_public_key = state.provider.relayer_public_key().to_string();
+    let expected_account = state.provider.as_near().relayer_account_id().to_string();
+    let expected_public_key = state.provider.as_near().relayer_public_key().to_string();
     if record.relayer_account_id.as_deref() != Some(expected_account.as_str())
         || record.relayer_public_key.as_deref() != Some(expected_public_key.as_str())
     {
@@ -1649,10 +1650,10 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
     validate_stored_transaction(record, bytes, hash, &signer).inspect_err(|_| {
         state.readiness.set_relayer(false);
     })?;
-    let primary = state.provider.query_transaction(hash, signer.clone()).await;
+    let primary = state.provider.as_near().query_transaction(hash, signer.clone()).await;
     let backup = state
         .provider
-        .query_transaction_backup(hash, signer.clone())
+        .as_near().query_transaction_backup(hash, signer.clone())
         .await;
     let primary_final = final_outcome(&primary);
     let backup_final = final_outcome(&backup);
@@ -1694,7 +1695,7 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
     }
 
     let primary_status = fresh_relayer_status(state).await?;
-    let backup_head = state.provider.backup_relayer_head().await.map_err(|_| {
+    let backup_head = state.provider.as_near().backup_relayer_head().await.map_err(|_| {
         StoreError::Corrupt("backup relayer state unavailable during reconciliation".to_owned())
     })?;
     let prepared_nonce = record
@@ -1752,7 +1753,7 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
         ));
     }
     let current_primary = fresh_relayer_status(state).await?;
-    let current_backup = state.provider.backup_relayer_head().await.map_err(|_| {
+    let current_backup = state.provider.as_near().backup_relayer_head().await.map_err(|_| {
         StoreError::Corrupt("backup relayer state unavailable before rebroadcast".to_owned())
     })?;
     if current_primary.access_key_nonce != primary_status.access_key_nonce
@@ -1763,7 +1764,7 @@ async fn reconcile_prepared(state: &AppState, record: &SettlementRecord) -> Resu
             "relayer nonce changed before exact-byte rebroadcast".to_owned(),
         ));
     }
-    match state.provider.broadcast_exact(bytes).await {
+    match state.provider.as_near().broadcast_exact(bytes).await {
         Ok(TransactionLookup::Final(outcome)) => {
             let payer = record
                 .payer
@@ -1903,7 +1904,7 @@ async fn finalize_reconciled(
     if let Err(error) = validate_final_outcome_identity(
         outcome,
         transaction_hash,
-        &state.provider.relayer_account_id(),
+        &state.provider.as_near().relayer_account_id(),
         payer,
     ) {
         state.readiness.set_reconciliation(false);

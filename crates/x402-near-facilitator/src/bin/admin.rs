@@ -15,6 +15,7 @@ use uuid::Uuid;
 use x402_chain_near::{JsonRpcNearRpc, NearChainProvider, NearNetwork, NearRpc, V2NearExact};
 use x402_facilitator_local::FacilitatorLocal;
 use x402_near_facilitator::auth::{ApiKeyAuthenticator, GeneratedApiKey};
+use x402_near_facilitator::chain::ChainProvider;
 use x402_near_facilitator::config::{Environment, SecretFiles, ServiceConfig, read_secret};
 use x402_near_facilitator::leadership::{LeadershipHandle, ReadinessState};
 use x402_near_facilitator::service::{AppState, reconcile};
@@ -328,7 +329,7 @@ async fn reconcile_command(config_path: &Path) -> Result<()> {
         store,
         auth,
         build_facilitator(provider.clone()),
-        provider,
+        ChainProvider::Near(provider),
         readiness.clone(),
         telemetry.metrics(),
     );
