@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
-  title: FastNEAR x402 facilitator for NEAR
-  version: 0.1.0
+  title: x402 facilitator for NEAR
+  version: 0.1.3
   description: |
     API-key-gated x402 v2 exact-payment facilitator for Circle USDC on NEAR.
     Each deployed server is pinned to one network. Expected payment rejection
@@ -13,12 +13,12 @@ info:
     name: Apache-2.0
     identifier: Apache-2.0
   contact:
-    name: FastNEAR
-    url: https://fastnear.com
+    name: Mike Purvis
+    url: https://mikedotexe.com
 servers:
-  - url: https://test.x402.fastnear.com
+  - url: https://test.x402.mikedotexe.com
     description: Testnet; not available until the launch checklist is complete
-  - url: https://x402.fastnear.com
+  - url: https://x402.mikedotexe.com
     description: Mainnet; not available until the launch checklist is complete
 tags:
   - name: Discovery

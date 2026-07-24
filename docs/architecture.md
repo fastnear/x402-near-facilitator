@@ -12,7 +12,7 @@ flowchart LR
     A["Primary NEAR RPC"]
     B["Independent backup NEAR RPC"]
     N["NEAR token receipts"]
-    O["Honeycomb via OTLP"]
+    O["Optional OTLP telemetry backend"]
 
     P --> R
     R -->|"/verify and /settle with API key"| F
@@ -52,7 +52,7 @@ The reusable mechanism owns:
 - final transaction lookup and inner receipt-graph validation.
 
 It has no HTTP authentication, tenant policy, PostgreSQL schema, deployment,
-or Honeycomb dependency.
+or telemetry dependency.
 
 ### Service boundary
 
@@ -169,16 +169,20 @@ holds a session advisory lock and keeps readiness false while reconciling:
 
 ## Operational topology
 
-Nginx terminates origin TLS and routes:
+Nginx terminates public TLS and routes:
 
-- `x402.fastnear.com` to `127.0.0.1:8402`;
-- `test.x402.fastnear.com` to `127.0.0.1:8403`.
+- `x402.mikedotexe.com` to `127.0.0.1:8402`;
+- `test.x402.mikedotexe.com` to `127.0.0.1:8403`.
 
-Cloudflare proxies both public DNS records. The origin certificate covers only
-these names, and Cloudflare must use Full (strict) mode. Each systemd unit reads
-non-secret JSON from `/etc/x402-near-facilitator/<environment>.json` and
-receives the database URL, relayer credential, API-key pepper, and OTLP headers
-through `LoadCredential`.
+Route 53 records point both names directly at the host; no CDN or proxy tier
+fronts the origin. One publicly trusted certificate covers exactly these
+names, deny-by-default virtual hosts refuse unknown Host and SNI values, and
+the API-key boundary plus Nginx method, body-size, and timeout limits face
+the public Internet directly.
+Each systemd unit reads non-secret JSON from
+`/etc/x402-near-facilitator/<environment>.json` and receives the database URL,
+relayer credential, API-key pepper, and OTLP headers through
+`LoadCredential`.
 
 Releases are immutable version directories. The `current-mainnet` and
 `current-testnet` symlinks are the only deployment pointers, so each

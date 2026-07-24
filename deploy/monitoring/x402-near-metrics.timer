@@ -1,0 +1,10 @@
+[Unit]
+Description=x402-near operational metrics every five minutes
+
+[Timer]
+OnCalendar=*:0/5
+RandomizedDelaySec=30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

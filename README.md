@@ -1,4 +1,4 @@
-# FastNEAR x402 facilitator for NEAR
+# x402 facilitator for NEAR
 
 A production-oriented Rust facilitator for x402 v2 `exact` payments in Circle
 USDC on NEAR. It verifies a payer's NEP-366 signed delegate action, sponsors
@@ -14,8 +14,8 @@ after the inner NEP-141 `ft_transfer` receipt succeeds.
 
 | Environment | Network | Planned URL | Asset | Initial payee |
 | --- | --- | --- | --- | --- |
-| Testnet | `near:testnet` | `https://test.x402.fastnear.com` | Circle test USDC | `merchant.mike.testnet` |
-| Mainnet | `near:mainnet` | `https://x402.fastnear.com` | Circle native USDC | `count.mike.near` |
+| Testnet | `near:testnet` | `https://test.x402.mikedotexe.com` | Circle test USDC | `merchant.mike.testnet` |
+| Mainnet | `near:mainnet` | `https://x402.mikedotexe.com` | Circle native USDC | `count.mike.near` |
 
 The service is intentionally narrow at launch:
 
@@ -106,8 +106,8 @@ uses the official x402 middleware and NEAR server scheme, requires
 
 ## Operations
 
-Production is deployed as two hardened systemd services behind Nginx on the
-FastNEAR host. Releases are installed under
+Production is deployed as two hardened systemd services behind Nginx on a
+single personal host. Releases are installed under
 `/opt/x402-near-facilitator/releases/<version>` and selected through an atomic
 `current-mainnet` or `current-testnet` symlink. Installation never changes
 either pointer: the packaged promotion tool first runs an on-host

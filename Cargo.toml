@@ -7,13 +7,13 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.93.0"
 license = "Apache-2.0"
 repository = "https://github.com/fastnear/x402-near-facilitator"
-homepage = "https://x402.fastnear.com"
-authors = ["FastNEAR"]
+homepage = "https://x402.mikedotexe.com"
+authors = ["Mike Purvis"]
 keywords = ["near", "payments", "stablecoin", "x402"]
 categories = ["cryptography::cryptocurrencies", "finance", "network-programming"]
 
@@ -26,22 +26,22 @@ borsh = "1.5"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 hex = "0.4"
-hmac = "0.12"
+hmac = "0.13"
 http = "1.4"
 near-crypto = "=0.37.1"
 near-jsonrpc-client = { version = "=0.22.0", default-features = false, features = ["rustls-tls"] }
 near-jsonrpc-primitives = "=0.37.1"
 near-primitives = "=0.37.1"
-rand = "0.8"
+rand = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
-sha2 = "0.10"
+sha2 = "0.11"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "migrate", "chrono", "json", "uuid"] }
 subtle = "2.6"
 thiserror = "2.0"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5", features = ["limit", "timeout", "util"] }
-tower-http = { version = "0.6", features = ["catch-panic", "limit", "request-id", "sensitive-headers", "timeout", "trace"] }
+tower-http = { version = "0.7", features = ["catch-panic", "limit", "request-id", "sensitive-headers", "timeout", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = { version = "2.5", features = ["serde"] }

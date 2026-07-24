@@ -3,7 +3,7 @@
   "network": "near:testnet",
   "bind_address": "127.0.0.1:8403",
   "primary_rpc_url": "https://rpc.testnet.fastnear.com",
-  "backup_rpc_url": "https://rpc.testnet.near.org",
+  "backup_rpc_url": "https://archival-rpc.testnet.fastnear.com",
   "asset": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
   "asset_symbol": "USDC",
   "minimum_amount": "1000",

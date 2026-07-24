@@ -951,7 +951,7 @@ async fn authenticate(
             "invalid_api_key",
             "missing or invalid API key",
         )),
-        Err(AuthError::Store(_)) => Err(ApiError::unavailable(
+        Err(AuthError::Store(_) | AuthError::Entropy) => Err(ApiError::unavailable(
             "authentication_unavailable",
             "authentication is temporarily unavailable",
         )),

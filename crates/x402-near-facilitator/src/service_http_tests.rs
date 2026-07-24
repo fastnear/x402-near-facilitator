@@ -6,6 +6,7 @@ use std::os::unix::fs::OpenOptionsExt as _;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -30,6 +31,7 @@ use near_primitives::views::{
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use tokio::sync::Barrier;
 use tower::ServiceExt as _;
 use url::Url;
 use uuid::Uuid;
@@ -62,6 +64,7 @@ const TEST_PEPPER: [u8; 32] = [0x42; 32];
 #[derive(Debug)]
 struct MockRpc {
     block: FinalBlock,
+    broadcast_journal: StdMutex<Option<PgPool>>,
     sends: AtomicUsize,
     payer_nonce: AtomicU64,
     relayer_nonce: AtomicU64,
@@ -74,9 +77,54 @@ impl MockRpc {
                 height: 1_000,
                 hash: CryptoHash::hash_bytes(b"http-conformance-final-block"),
             },
+            broadcast_journal: StdMutex::new(None),
             sends: AtomicUsize::new(0),
             payer_nonce: AtomicU64::new(0),
             relayer_nonce: AtomicU64::new(0),
+        }
+    }
+
+    fn require_submitted_before_broadcast(&self, pool: PgPool) {
+        *self
+            .broadcast_journal
+            .lock()
+            .unwrap_or_else(|_| std::process::abort()) = Some(pool);
+    }
+
+    async fn assert_submitted_before_broadcast(
+        &self,
+        signed_transaction: &SignedTransaction,
+    ) -> Result<(), NearRpcError> {
+        let pool = self
+            .broadcast_journal
+            .lock()
+            .unwrap_or_else(|_| std::process::abort())
+            .clone();
+        let Some(pool) = pool else {
+            return Ok(());
+        };
+        let transaction_hash = signed_transaction.get_hash().to_string();
+        let transaction_bytes = borsh::to_vec(signed_transaction)
+            .map_err(|_| NearRpcError::InvalidSignedTransaction)?;
+        let row = sqlx::query_as::<_, (String, Option<Vec<u8>>)>(
+            "SELECT state, outer_transaction_bytes \
+             FROM settlements WHERE outer_transaction_hash = $1",
+        )
+        .bind(transaction_hash)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| {
+            NearRpcError::InvalidResponse("HTTP fixture could not inspect the settlement journal")
+        })?;
+        match row {
+            Some((state, Some(stored_bytes)))
+                if state == "submitted" && stored_bytes == transaction_bytes =>
+            {
+                Ok(())
+            }
+            _ => Err(NearRpcError::InvalidResponse(
+                "outer transaction was not durably submitted before broadcast",
+            )),
         }
     }
 
@@ -158,6 +206,8 @@ impl NearRpc for MockRpc {
         &self,
         signed_transaction: SignedTransaction,
     ) -> Result<TransactionLookup, NearRpcError> {
+        self.assert_submitted_before_broadcast(&signed_transaction)
+            .await?;
         self.sends.fetch_add(1, Ordering::SeqCst);
         let transaction = &signed_transaction.transaction;
         self.relayer_nonce
@@ -280,9 +330,9 @@ fn service_config() -> TestResult<ServiceConfig> {
         request_limits: RequestLimits {
             body_bytes: 65_536,
             verify_per_minute: 100,
-            settle_per_minute: 100,
+            settle_per_minute: 500,
             verify_timeout_seconds: 15,
-            settle_timeout_seconds: 5,
+            settle_timeout_seconds: 30,
             max_concurrent_verify: 64,
         },
         sponsorship: SponsorshipConfig {
@@ -664,7 +714,7 @@ async fn assert_protected_contract(
     metrics: Metrics,
     payer: &Signer,
 ) -> TestResult {
-    let (_client, key) = seed_client(&database.store, 1, 100, 100).await?;
+    let (_client, key) = seed_client(&database.store, 1, 100, 500).await?;
     let application = build_application(database.store.clone(), metrics)?;
     database
         .store
@@ -908,12 +958,19 @@ async fn assert_protected_contract(
     let identifier = "payment_http_0000000000000001";
     let settlement = valid_request(payer, 1, Some(identifier))?;
     let settlement_bytes = serde_json::to_vec(&settlement)?;
+    application
+        .rpc
+        .require_submitted_before_broadcast(database.pool.clone());
+    let concurrency = 200;
+    let barrier = Arc::new(Barrier::new(concurrency + 1));
     let mut tasks = tokio::task::JoinSet::new();
-    for _ in 0..8 {
+    for _ in 0..concurrency {
         let router = application.router.clone();
         let body = settlement_bytes.clone();
         let key = key.clone();
+        let barrier = Arc::clone(&barrier);
         tasks.spawn(async move {
+            barrier.wait().await;
             let request = http_request(
                 Method::POST,
                 "/settle",
@@ -925,18 +982,37 @@ async fn assert_protected_contract(
             call(&router, request).await
         });
     }
+    barrier.wait().await;
     let mut terminal_bytes: Option<Vec<u8>> = None;
+    let mut completed = 0;
     while let Some(joined) = tasks.join_next().await {
         let response = joined??;
         assert_eq!(response.status, StatusCode::OK);
         assert_eq!(response.json()?["success"], true);
+        completed += 1;
         if let Some(expected) = &terminal_bytes {
             assert_eq!(&response.bytes, expected);
         } else {
             terminal_bytes = Some(response.bytes);
         }
     }
+    assert_eq!(completed, concurrency);
     assert_eq!(application.rpc.sends.load(Ordering::SeqCst), 1);
+    let settlement_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM settlements WHERE payment_identifier = $1")
+            .bind(identifier)
+            .fetch_one(&database.pool)
+            .await?;
+    let states: Vec<String> = sqlx::query_scalar(
+        "SELECT to_state FROM settlement_events WHERE settlement_id = $1 ORDER BY id",
+    )
+    .bind(settlement_id)
+    .fetch_all(&database.pool)
+    .await?;
+    assert_eq!(
+        states,
+        vec!["reserved", "prepared", "submitted", "succeeded"]
+    );
 
     let replay = call(
         &application.router,

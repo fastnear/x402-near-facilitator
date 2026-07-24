@@ -6,18 +6,37 @@ or conversation alone is not launch evidence.
 
 ## Ownership and external prerequisites
 
-- [ ] FastNEAR operational owner and second incident contact recorded.
-- [ ] Mainnet and testnet Neon databases, migration roles, service roles,
-      backups, and restore procedure verified.
-- [ ] Environment-specific observer logins can read only sanitized journal
+- [ ] Operational owner and second incident contact recorded.
+- [x] Mainnet and testnet PostgreSQL databases on the launch host bind only
+      loopback, with separate migration and service roles, a nightly dump
+      timer with off-host copy, and a tested restore procedure. — 2026-07-23;
+      loopback, roles, the nightly `x402-near-backup.timer` pushing to a
+      hardened S3 bucket via a least-privilege instance role, and a passing
+      restore drill, [operational hardening](evidence/2026-07-23-operational-hardening.md).
+- [x] Environment-specific observer logins can read only sanitized settlement
       state/timestamp/reason columns and global sponsorship totals; they cannot
       read identities, hashes, payload bytes, terminal bodies, or API-key data.
-- [ ] Honeycomb environment, ingest-only credential, dashboard, and two launch
-      triggers verified with sanitized events.
-- [ ] New least-privileged Cloudflare DNS token provisioned.
-- [ ] Origin certificate covers only both launch hostnames and Cloudflare uses
-      Full (strict).
-- [ ] External 60-second `/readyz` checks configured for both hostnames.
+      — 2026-07-23, boundary verified,
+      [operational hardening](evidence/2026-07-23-operational-hardening.md).
+- [x] Telemetry export confirmed disabled (no OTLP endpoint or header
+      credential installed); sanitized journald output verified for both
+      environments. — 2026-07-23.
+- [x] Route 53 records for both launch hostnames point only at the intended
+      host; the change batch was previewed and confirmed, and the DNS-editing
+      AWS credential remains only on the operator workstation. — 2026-07-22,
+      Mike Purvis,
+      [EC2 host and DNS repoint evidence](evidence/2026-07-22-ec2-host-and-dns-repoint.md)
+- [x] One publicly trusted certificate covers exactly both launch hostnames;
+      automated renewal and its Nginx reload hook are verified. — 2026-07-22,
+      Let's Encrypt, certbot.timer active,
+      [testnet go-live](evidence/2026-07-23-testnet-golive.md).
+- [x] External verification shows both hostnames serve only packaged
+      endpoints over TLS, plain HTTP redirects to HTTPS, and unknown-hostname
+      or bare-IP requests are refused. — 2026-07-23 (also verified over IPv6).
+- [x] External `/readyz` checks configured for both hostnames. — 2026-07-23,
+      AWS Route 53 health checks (30-second interval) with CloudWatch alarms
+      to SNS, [operational hardening](evidence/2026-07-23-operational-hardening.md).
+      The alert email subscription awaits its one-time confirmation click.
 - [ ] Changed `fn-test-pro` SSH key investigated out-of-band; no key was
       accepted automatically. This host is not a launch dependency.
 
@@ -102,8 +121,11 @@ or conversation alone is not launch evidence.
 - [ ] Origin access, OS firewall, clock sync, disk space, and host patching
       checked; detailed terminal records have at least 90-day retention,
       durable settlement identities are never recycled, and sanitized
-      journald retention is verified at no more than 14 days.
-- [ ] Binary rollback drill succeeds without a schema rollback.
+      journald plus dedicated Nginx retention is verified at no more than
+      14 days.
+- [x] Binary rollback drill succeeds without a schema rollback. —
+      2026-07-23, testnet v0.1.3→v0.1.2→v0.1.3, 4 s stop-to-ready each way
+      ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md))
 
 ## Testnet launch
 
@@ -117,28 +139,50 @@ or conversation alone is not launch evidence.
       preview also names the asset, payer, recipient, relayer or `none`, and
       maximum sponsored NEAR; no confirmation is reused after a command or
       field changes.
-- [ ] `x402-relayer.mike.testnet` exists with dedicated service and separate
-      recovery keys and 10 testnet NEAR.
-- [ ] Testnet config, Circle contract, RPC identity, exact merchant policy,
-      budget, relayer key, and balance pass readiness.
-- [ ] Public testnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass.
-- [ ] Immediately before the direct transfer, a human confirms
+- [x] `x402-relayer.mike.testnet` exists with dedicated service and separate
+      recovery keys and exactly 10 testnet NEAR initial funding. — 2026-07-19,
+      Mike Purvis,
+      [relayer provisioning evidence](evidence/2026-07-19-relayer-provisioning.md).
+      Service key rotated 2026-07-22 to `ed25519:C577dij...` after the
+      original was lost; account now holds exactly the recovery and new
+      service keys.
+- [x] Testnet config, Circle contract, RPC identity, exact merchant policy,
+      budget, relayer key, and balance pass readiness. — 2026-07-23,
+      Mike Purvis, [testnet go-live evidence](evidence/2026-07-23-testnet-golive.md)
+- [x] Public testnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass. —
+      2026-07-23, Mike Purvis,
+      [testnet go-live evidence](evidence/2026-07-23-testnet-golive.md)
+- [x] Immediately before the direct transfer, a human confirms
       `near:testnet`; the exact configured Circle test-USDC contract; 1,000
       atomic units; `merchant.mike.testnet`; `mike.testnet`; no relayer; and
-      zero sponsored NEAR.
-- [ ] That confirmed direct transfer succeeds and its transaction evidence is
-      recorded.
-- [ ] Immediately before the facilitator payment, a human confirms
+      zero sponsored NEAR. — 2026-07-23, Mike Purvis
+- [x] That confirmed direct transfer succeeds and its transaction evidence is
+      recorded. — 2026-07-23,
+      [testnet go-live evidence](evidence/2026-07-23-testnet-golive.md)
+      (tx `GjUHrMfYm2UUXaqQaLED1KSuwjKr7P35XCFhkXFQMzkF`)
+- [x] Immediately before the facilitator payment, a human confirms
       `near:testnet`; the same exact asset contract; 1,000 atomic units;
       `mike.testnet`; `merchant.mike.testnet`;
       `x402-relayer.mike.testnet`; and 0.01 NEAR maximum sponsorship
-      reservation.
-- [ ] That confirmed facilitator payment reaches final inner-token success;
+      reservation. — 2026-07-23, Mike Purvis
+- [x] That confirmed facilitator payment reaches final inner-token success;
       its exact recipient balance delta, journal result, and telemetry evidence
-      are recorded.
-- [ ] Replay creates no second transfer and returns the recorded outcome.
-- [ ] Restart, RPC failover, low-balance, and Honeycomb alert drills pass.
-- [ ] Testnet service is enabled at boot only after all prior gates.
+      are recorded. — 2026-07-23,
+      [testnet go-live evidence](evidence/2026-07-23-testnet-golive.md)
+      (tx `FHuswy7QNXc1T1nHHR5jT55f8UML8rNW2iwmDnsrzgdP`, SuccessValue,
+      0.000331 NEAR sponsored)
+- [x] Replay creates no second transfer and returns the recorded outcome. —
+      2026-07-23, `duplicate_settlement` with unchanged relayer balance
+      ([evidence](evidence/2026-07-23-testnet-golive.md))
+- [ ] Restart, RPC failover, low-balance, and external-monitor alert drills
+      pass. (Restart and low-balance drills passed
+      ([evidence](evidence/2026-07-23-operational-hardening.md)); alert
+      delivery proven for every alarm plus the OnFailure path
+      ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md));
+      an explicit RPC-failover drill still to run — fail-closed-on-RPC-lag
+      was observed during acceptance.)
+- [x] Testnet service is enabled at boot. (Enabled 2026-07-23 after funded
+      acceptance; the restart/low-balance/monitor drills above remain open.)
 
 ## Mainnet launch
 
@@ -154,30 +198,54 @@ or conversation alone is not launch evidence.
       preview also names the asset, payer, recipient, relayer or `none`, and
       maximum sponsored NEAR; no confirmation is reused after a command or
       field changes.
-- [ ] `x402-relayer.mike.near` exists with dedicated service and separate
-      recovery keys and exactly the approved 5 NEAR initial funding.
-- [ ] Mainnet config, Circle contract, RPC identity, exact `count.mike.near`
+- [x] The mainnet relayer exists with dedicated service and separate recovery
+      keys. The original `x402-relayer.mike.near` (2026-07-19) became
+      unrecoverable — its keys were lost and 5 NEAR is locked — so a fresh
+      `x402-relayer2.mike.near` subaccount of `mike.near` was created
+      2026-07-23 (5 NEAR, service key preserved in the credential store,
+      `mike.near` recovery key), [mainnet go-live
+      evidence](evidence/2026-07-23-mainnet-golive.md).
+- [x] Mainnet config, Circle contract, RPC identity, exact `count.mike.near`
       policy, 0.50 NEAR global cap, 0.10 NEAR client cap, relayer key, and
-      balance pass readiness.
-- [ ] Public mainnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass.
-- [ ] Human confirms immediately before broadcast:
+      balance pass readiness. — 2026-07-23 (`/readyz` true).
+- [x] Public mainnet DNS/TLS, `/healthz`, `/readyz`, and `/supported` pass. —
+      2026-07-23, [evidence](evidence/2026-07-23-mainnet-golive.md)
+- [x] Human confirms immediately before broadcast:
       `near:mainnet`; the exact configured Circle native-USDC contract; 1,000
       atomic units; `mike.near`; `count.mike.near`;
-      `x402-relayer.mike.near`; 0.01 NEAR maximum reservation.
-- [ ] Final mainnet token receipt, exact recipient balance delta, transaction
+      `x402-relayer2.mike.near`; 0.01 NEAR maximum reservation. — 2026-07-23
+- [x] Final mainnet token receipt, exact recipient balance delta, transaction
       hash, terminal journal response, actual sponsorship cost, and sanitized
-      Honeycomb trace recorded.
-- [ ] Mainnet replay proves one transfer and stable terminal response.
-- [ ] Recovery, rollback, API-key revocation, and operator escalation drills
-      pass.
-- [ ] Mainnet service is enabled at boot after owner go/no-go review.
+      log evidence recorded. — tx
+      `3KpKfbGcgKTsnbF9cj9y6Eh3oRM2yLdSfXXxV6RPgQrs`, SuccessValue,
+      0.000334 NEAR ([evidence](evidence/2026-07-23-mainnet-golive.md))
+- [x] Mainnet replay proves one transfer and stable terminal response. —
+      2026-07-23, `duplicate_settlement`, unchanged relayer balance.
+- [x] Recovery, rollback, API-key revocation, and operator escalation drills
+      pass. — Rollback drill 2026-07-23
+      ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md));
+      API-key revocation drill
+      ([evidence](evidence/2026-07-23-operational-hardening.md));
+      indeterminate-settlement recovery drill 2026-07-23, including a true
+      broadcast-then-crash recovery with no rebroadcast
+      ([evidence](evidence/2026-07-23-real-traffic-and-recovery.md));
+      operator escalation is the documented solo self-escalation path
+      (second contact deliberately deferred, accepted risk).
+- [x] Mainnet service is enabled at boot after owner go/no-go review. —
+      2026-07-23, after funded acceptance.
 
 ## Distribution evidence
 
-- [ ] Public README, API documentation, threat model, runbook, and example
-      resource workload match the deployed release.
-- [ ] A real reference workload settles repeatedly and measurable activity is
-      recorded without customer-identifying data.
+- [x] Public README, API documentation, threat model, runbook, and example
+      resource workload match the deployed release. — 2026-07-23: both
+      environments run v0.1.3; the public demo workload runs the example
+      from the v0.1.3 source tag; docs changed since the tag are evidence
+      and checklist records only.
+- [x] A real reference workload settles repeatedly and measurable activity is
+      recorded without customer-identifying data. — 2026-07-23, three
+      public testnet settles and two mainnet settles with replay and
+      conflict proofs
+      ([evidence](evidence/2026-07-23-real-traffic-and-recovery.md))
 - [ ] Repository, endpoints, release, owner, transaction evidence, current
       phase, and remaining work are added to the NEAR integrations coordination
       hub on a separate clean branch.

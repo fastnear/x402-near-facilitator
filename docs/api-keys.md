@@ -27,7 +27,7 @@ HMAC-SHA256 digest produced with the separately provisioned service pepper.
 Do not pass a raw key as a command-line argument. Write it directly to the
 client's secret manager or a mode-0600 file through a pipe or password-manager
 integration that does not echo. Never put it in shell history, issue text,
-chat, screenshots, test fixtures, or Honeycomb.
+chat, screenshots, test fixtures, or telemetry.
 
 ## Required policy
 
@@ -43,7 +43,7 @@ Before a key is enabled, record:
 
 The facilitator database enforces the client name, environment, status,
 allowlist, limits, and budget. Owner/contact/review metadata and each operator
-action belong in FastNEAR's access registry or ticketing system; they are not
+action belong in the operator's private client registry; they are not
 stored in the settlement database. Link that external audit record to the
 client UUID without copying the raw key.
 
