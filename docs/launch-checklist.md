@@ -6,7 +6,11 @@ or conversation alone is not launch evidence.
 
 ## Ownership and external prerequisites
 
-- [ ] Operational owner and second incident contact recorded.
+- [ ] Operational owner and second incident contact recorded. — 2026-07-23:
+      owner Mike Purvis / FastNEAR recorded across ops docs; the **second
+      incident contact is deliberately deferred (accepted risk, solo
+      operator)** — the only item keeping this box open
+      ([operational hardening](evidence/2026-07-23-operational-hardening.md)).
 - [x] Mainnet and testnet PostgreSQL databases on the launch host bind only
       loopback, with separate migration and service roles, a nightly dump
       timer with off-host copy, and a tested restore procedure. — 2026-07-23;
@@ -38,107 +42,193 @@ or conversation alone is not launch evidence.
       to SNS, [operational hardening](evidence/2026-07-23-operational-hardening.md).
       The alert email subscription awaits its one-time confirmation click.
 - [ ] Changed `fn-test-pro` SSH key investigated out-of-band; no key was
-      accepted automatically. This host is not a launch dependency.
+      accepted automatically. This host is not a launch dependency. —
+      Superseded: launch runs on the dedicated EC2 host
+      `i-0537770b34b04b820` migrated to 2026-07-22, not the former shared
+      host, so this is no longer a launch dependency
+      ([EC2 host and DNS repoint](evidence/2026-07-22-ec2-host-and-dns-repoint.md)).
 
 ## Repository and supply chain
 
-- [ ] Public `fastnear/x402-near-facilitator` repository exists with Apache-2.0
+- [x] Public `fastnear/x402-near-facilitator` repository exists with Apache-2.0
       license, branch protection, security contact, and no secrets in history.
-- [ ] Rust 1.93, `Cargo.lock`, x402-rs crate versions, NEAR crate versions, and
-      official `@x402/near` oracle version are pinned.
-- [ ] Formatting, Clippy with warnings denied, all tests, migration test,
-      oracle diff, `cargo deny`, and `cargo audit` pass in CI.
-- [ ] Tagged release contains both x86-64 binaries, checksum, SBOM, provenance,
+      — 2026-07-24: public repo, Apache-2.0 (`LICENSE`), protected `main`,
+      `SECURITY.md` security contact.
+- [x] The Rust toolchain (pinned to 1.93 by `rust-toolchain.toml`; container
+      build image `rust:1.97-bookworm` per `Dockerfile`), `Cargo.lock`, x402-rs
+      crate versions (`x402-types` / `x402-facilitator-local` `=2.0.2`), NEAR
+      crate versions (`near-*` `=0.37.1`, `near-jsonrpc-client` `=0.22.0`), and
+      official `@x402/near@2.19.0` oracle version are pinned. — 2026-07-24.
+- [x] Formatting, Clippy with warnings denied, all tests, migration test,
+      oracle diff, `cargo deny`, and `cargo audit` pass in CI. — 2026-07-23:
+      enforced on every push and on v0.1.3 by `scripts/check.sh` and
+      `.github/workflows/ci.yml`.
+- [x] Tagged release contains both x86-64 binaries, checksum, SBOM, provenance,
       migrations, the reviewed `docs/` and `deploy/` trees, and a GHCR image.
-- [ ] The archive checksum and GitHub attestation were verified before any
+      — 2026-07-23, v0.1.3 with checksum, SBOM, provenance/SBOM attestations,
+      and GHCR image
+      ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md)).
+- [x] The archive checksum and GitHub attestation were verified before any
       member was executed; the root installer used the packaged, attested copy
       rather than a mutable checkout, and the installed `deploy/` and `docs/`
-      asset manifests pass.
+      asset manifests pass. — 2026-07-23: `gh attestation verify` before
+      staging; packaged installer; on-host asset manifests pass
+      ([evidence](evidence/2026-07-23-testnet-golive.md)).
 
 ## Protocol and security acceptance
 
-- [ ] ED25519 and SECP256K1 fixtures interoperate with pinned
-      `@x402/near@2.19.0`.
-- [ ] Version, network, scheme, requirement, base64, Borsh/trailing-byte,
+All boxes in this section are gated by CI (`scripts/check.sh` +
+`.github/workflows/ci.yml`, including the pinned TypeScript interoperability
+oracle) on every push and on the v0.1.3 release tag; the named tests are the
+durable coverage.
+
+- [x] ED25519 and SECP256K1 fixtures interoperate with pinned
+      `@x402/near@2.19.0`. — 2026-07-23: `tests.rs::decodes_typescript_ed25519_and_secp256k1_fixtures`
+      against `fixtures/signed-delegates.json` (both curves) + the CI oracle job.
+- [x] Version, network, scheme, requirement, base64, Borsh/trailing-byte,
       curve, DelegateV2, action, method, JSON, token, payee, amount, deposit,
       gas, timeout, nonce, permission, account, code, balance, and storage
-      negatives pass.
-- [ ] Every RPC error path fails closed using typed errors.
-- [ ] Receipt tests cover inner success, outer-only success, inner failure,
-      missing/ambiguous token receipt, and pending status.
-- [ ] Official TypeScript `HTTPFacilitatorClient` accepts `/supported`,
-      `/verify`, `/settle`, and canonical failure/omission shapes.
-- [ ] API-key header and Bearer alternatives pass; identical dual credentials
+      negatives pass. — 2026-07-23: the `x402-chain-near/src/tests.rs`
+      negative-path suite (canonical-first-failure ordering, unsafe action
+      shapes, expiry/nonce/block boundaries, typed access-key/account
+      failures, balance/storage preflights).
+- [x] Every RPC error path fails closed using typed errors. — 2026-07-23:
+      `rpc.rs` (`NearRpcError`) + the `typed_*` failure tests.
+- [x] Receipt tests cover inner success, outer-only success, inner failure,
+      missing/ambiguous token receipt, and pending status. — 2026-07-23:
+      the `receipt_graph_*` tests in `tests.rs` over `receipt.rs`.
+- [x] Official TypeScript `HTTPFacilitatorClient` accepts `/supported`,
+      `/verify`, `/settle`, and canonical failure/omission shapes. — 2026-07-23:
+      `conformance/http-client/check.mjs` (`@x402/core@2.19.0`) +
+      `service_http_tests.rs::custom_http_surface_matches_x402_contract`.
+- [x] API-key header and Bearer alternatives pass; identical dual credentials
       pass; missing, invalid, revoked, and non-identical dual credentials fail
-      without leaking comparison state.
-- [ ] `payment-identifier` same-ID/same-fingerprint replay, in-flight join,
-      different-fingerprint 409, and no-ID delegate duplicate pass.
-- [ ] Body/content-type, rate, timeout, concurrency, minimum amount, exact
-      payee, budget, and low-balance controls pass.
-- [ ] Fuzz and redaction checks find no panic or sensitive output.
+      without leaking comparison state. — 2026-07-23: `auth.rs` tests +
+      `service_http_tests.rs` revoke path.
+- [x] `payment-identifier` same-ID/same-fingerprint replay, in-flight join,
+      different-fingerprint 409, and no-ID delegate duplicate pass. — 2026-07-23:
+      `store_postgres_tests.rs::identifier_conflicts_and_delegate_duplicates_do_not_reserve_twice`,
+      `::lifecycle_terminalization_and_replay_are_durable_and_idempotent`.
+- [x] Body/content-type, rate, timeout, concurrency, minimum amount, exact
+      payee, budget, and low-balance controls pass. — 2026-07-23: `config.rs`
+      bound tests, `service_recovery_tests.rs::hard_balance_stop_prevents_preparation_and_broadcast`,
+      `store_postgres_tests.rs::client_budget_failure_rolls_back_global_reservation_atomically`,
+      nginx body limit.
+- [x] Fuzz and redaction checks find no panic or sensitive output. — 2026-07-23:
+      three `fuzz/fuzz_targets/*` + `fuzz.yml`;
+      `tests.rs::delegate_debug_output_redacts_payment_material`.
 
 ## PostgreSQL and recovery acceptance
 
-- [ ] Two competing instances prove exactly one advisory-lock leader.
-- [ ] Hundreds of concurrent identical settlements create one prepared outer
-      transaction and at most one broadcast.
-- [ ] Concurrent distinct settlements serialize relayer nonce use.
-- [ ] `submitted` is durable before broadcast, and a crash after every journal
-      transition recovers without re-signing.
-- [ ] Accepted-but-response-dropped submission resolves by stored hash.
-- [ ] Primary unknown/backup final and primary/backup disagreement paths pass.
-- [ ] Expired unknown transactions fail without rebroadcast; pending,
+The behavioral boxes are gated by the PostgreSQL integration tests in CI on
+v0.1.3 (named below); the restore box is a live drill.
+
+- [x] Two competing instances prove exactly one advisory-lock leader. —
+      2026-07-23: `leadership_postgres_tests.rs::competing_instances_have_exactly_one_leader_and_fail_over`.
+- [x] Hundreds of concurrent identical settlements create one prepared outer
+      transaction and at most one broadcast. — 2026-07-23:
+      `store_postgres_tests.rs::two_hundred_identical_claims_create_one_reservation`.
+- [x] Concurrent distinct settlements serialize relayer nonce use. — 2026-07-23:
+      `service_recovery_tests.rs::concurrent_distinct_settlements_serialize_unique_relayer_nonces`.
+- [x] `submitted` is durable before broadcast, and a crash after every journal
+      transition recovers without re-signing. — 2026-07-23:
+      `service_recovery_tests.rs::crash_restart_matrix_recovers_each_durable_transition_exactly_once`
+      + `assert_submitted_before_broadcast`.
+- [x] Accepted-but-response-dropped submission resolves by stored hash. —
+      2026-07-23: `service_recovery_tests.rs::accepted_response_drop_recovers_without_second_transaction`.
+- [x] Primary unknown/backup final and primary/backup disagreement paths pass.
+      — 2026-07-23: `service_recovery_tests.rs::backup_final_result_recovers_when_primary_is_unknown`,
+      `::conflicting_primary_and_backup_finals_fail_closed` (live operational
+      complement drilled 2026-07-24,
+      [RPC resilience](evidence/2026-07-24-rpc-resilience-and-host-verification.md)).
+- [x] Expired unknown transactions fail without rebroadcast; pending,
       identity-mismatched, missing-receipt, and ambiguous outcomes remain
-      nonterminal and fail readiness.
-- [ ] Unknown hash with advanced relayer nonce quarantines the key and fails
-      readiness.
-- [ ] Revocation, payee-policy failure, budget exhaustion, lost leadership,
-      database failure, and stale reservation release pass.
-- [ ] Budget reservation and settlement claim rollback atomically on failure.
-- [ ] Database restore drill preserves uniqueness and reconciles all
-      nonterminal rows.
+      nonterminal and fail readiness. — 2026-07-23: the
+      `service_recovery_tests.rs` expiry/nonterminal suite
+      (`expired_prepared_and_submitted_rows_never_rebroadcast`, and the
+      incomplete-receipt / wrong-identity / pending cases).
+- [x] Unknown hash with advanced relayer nonce quarantines the key and fails
+      readiness. — 2026-07-23: `service_recovery_tests.rs::both_unknown_with_advanced_backup_nonce_quarantines_relayer`,
+      `::quarantined_relayer_policy_prevents_preparation_and_broadcast`.
+- [x] Revocation, payee-policy failure, budget exhaustion, lost leadership,
+      database failure, and stale reservation release pass. — 2026-07-23:
+      `admin_cli.rs` lifecycle + `store`/`store_postgres_tests.rs` payee-policy
+      and budget-rollback + `leadership_postgres_tests.rs` fail-over +
+      disconnected-store and reconciliation/expiry tests.
+- [x] Budget reservation and settlement claim rollback atomically on failure.
+      — 2026-07-23: `store_postgres_tests.rs::client_budget_failure_rolls_back_global_reservation_atomically`.
+- [x] Database restore drill preserves uniqueness and reconciles all
+      nonterminal rows. — 2026-07-23: restore drill; all tables and both unique
+      constraints restored, duplicate insert rejected
+      ([operational hardening](evidence/2026-07-23-operational-hardening.md)).
 
 ## Host hardening
 
-- [ ] Separate `x402-near-mainnet` and `x402-near-testnet` users have no login
-      shell or home.
-- [ ] Versioned release is root-owned; `current-mainnet` and
+Host-state boxes verified live 2026-07-24
+([host verification](evidence/2026-07-24-rpc-resilience-and-host-verification.md), §2).
+
+- [x] Separate `x402-near-mainnet` and `x402-near-testnet` users have no login
+      shell or home. — 2026-07-24: both `home=/nonexistent
+      shell=/usr/sbin/nologin`.
+- [x] Versioned release is root-owned; `current-mainnet` and
       `current-testnet` are the only mutable pointers, installation changes
-      neither, and each environment is promoted separately.
-- [ ] Host glibc, architecture, kernel, systemd, and Nginx versions are
+      neither, and each environment is promoted separately. — 2026-07-23:
+      `releases/v0.1.3` root-owned; atomic pointer swap leaves the other
+      environment untouched
+      ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md);
+      `deploy/promote-release.sh`).
+- [x] Host glibc, architecture, kernel, systemd, and Nginx versions are
       recorded and compatible with the release build baseline; the packaged
       binary's on-host `--version` ABI smoke check passes before each
-      environment pointer changes.
-- [ ] Config is non-secret; credentials are separate root-owned mode-0600
-      regular files and are not reused across environments.
-- [ ] systemd sandbox settings and writable paths were reviewed with
-      `systemd-analyze security`.
-- [ ] `LimitCORE=0` is effective for both units and `coredumpctl` contains no
-      service core dumps from acceptance or fault testing.
-- [ ] Nginx binds public TLS; services bind only loopback ports 8402/8403.
-- [ ] Nginx limits bodies to 64 KiB, preserves canonical application errors,
-      disables CORS, and does not log authentication headers or bodies.
-- [ ] Origin access, OS firewall, clock sync, disk space, and host patching
+      environment pointer changes. — 2026-07-24: kernel `6.17.0-1019-aws`,
+      `x86_64`, glibc `2.39`, systemd `255`, nginx `1.24.0`; ABI smoke check
+      per go-live records.
+- [x] Config is non-secret; credentials are separate root-owned mode-0600
+      regular files and are not reused across environments. — 2026-07-24: all
+      ten `/etc/x402-near-facilitator/credentials/{mainnet,testnet}/*` files
+      are `600 root:root`; `deploy/config/*.json.example` are non-secret.
+- [x] systemd sandbox settings and writable paths were reviewed with
+      `systemd-analyze security`. — 2026-07-24: overall exposure **1.5 OK**
+      for both units.
+- [x] `LimitCORE=0` is effective for both units and `coredumpctl` contains no
+      service core dumps from acceptance or fault testing. — 2026-07-24:
+      `LimitCORE=0` in the unit; both PIDs show `Max core file size 0 0`;
+      `coredumpctl` lists no x402 dumps.
+- [x] Nginx binds public TLS; services bind only loopback ports 8402/8403. —
+      2026-07-24: services listen only on `127.0.0.1:8402`/`8403`; Nginx
+      terminates public TLS (`nginx/x402-near-facilitator.conf`).
+- [x] Nginx limits bodies to 64 KiB, preserves canonical application errors,
+      disables CORS, and does not log authentication headers or bodies. —
+      `nginx/x402-near-facilitator.conf` (`client_max_body_size 64k`,
+      canonical 413 JSON, CSP `default-src 'none'`, `combined` access log).
+- [x] Origin access, OS firewall, clock sync, disk space, and host patching
       checked; detailed terminal records have at least 90-day retention,
       durable settlement identities are never recycled, and sanitized
       journald plus dedicated Nginx retention is verified at no more than
-      14 days.
+      14 days. — 2026-07-24: security-group firewall; NTP synchronized; root
+      12% used / 25 G free; `unattended-upgrades` enabled; Nginx logrotate
+      `rotate 13`/`maxage 14`; 90-day terminal retention and non-recycled
+      identities per `docs/architecture.md`.
 - [x] Binary rollback drill succeeds without a schema rollback. —
       2026-07-23, testnet v0.1.3→v0.1.2→v0.1.3, 4 s stop-to-ready each way
       ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md))
 
 ## Testnet launch
 
-- [ ] Immediately before local service-key generation, a human confirms the
+- [x] Immediately before local service-key generation, a human confirms the
       testnet target account, ED25519 algorithm, create-new mode-0600 path, and
-      no-private-output behavior.
-- [ ] Immediately before each testnet account creation, access-key addition or
+      no-private-output behavior. — 2026-07-19, and enforced by
+      `admin_cli.rs::generate_relayer_is_create_new_mode_0600_and_never_prints_private_material`
+      ([relayer provisioning](evidence/2026-07-19-relayer-provisioning.md)).
+- [x] Immediately before each testnet account creation, access-key addition or
       removal, and funding transaction, a human confirms a fresh CLI preview
       containing network, operation, signer, target account, public key and
       permission when applicable, and exact funding amount. Every funded
       preview also names the asset, payer, recipient, relayer or `none`, and
       maximum sponsored NEAR; no confirmation is reused after a command or
-      field changes.
+      field changes. — 2026-07-19 / 2026-07-23, field-by-field previews
+      ([relayer provisioning](evidence/2026-07-19-relayer-provisioning.md);
+      [real traffic](evidence/2026-07-23-real-traffic-and-recovery.md)).
 - [x] `x402-relayer.mike.testnet` exists with dedicated service and separate
       recovery keys and exactly 10 testnet NEAR initial funding. — 2026-07-19,
       Mike Purvis,
@@ -174,30 +264,42 @@ or conversation alone is not launch evidence.
 - [x] Replay creates no second transfer and returns the recorded outcome. —
       2026-07-23, `duplicate_settlement` with unchanged relayer balance
       ([evidence](evidence/2026-07-23-testnet-golive.md))
-- [ ] Restart, RPC failover, low-balance, and external-monitor alert drills
-      pass. (Restart and low-balance drills passed
-      ([evidence](evidence/2026-07-23-operational-hardening.md)); alert
-      delivery proven for every alarm plus the OnFailure path
-      ([evidence](evidence/2026-07-23-v013-rollback-and-alerting.md));
-      an explicit RPC-failover drill still to run — fail-closed-on-RPC-lag
-      was observed during acceptance.)
-- [x] Testnet service is enabled at boot. (Enabled 2026-07-23 after funded
-      acceptance; the restart/low-balance/monitor drills above remain open.)
+- [x] Restart, RPC-outage fail-closed/recovery, low-balance, and
+      external-monitor alert drills pass. — Restart and low-balance drills
+      2026-07-23 ([operational hardening](evidence/2026-07-23-operational-hardening.md));
+      alert delivery proven for every alarm plus the OnFailure path
+      ([alerting](evidence/2026-07-23-v013-rollback-and-alerting.md));
+      RPC-outage fail-closed + in-place recovery drilled 2026-07-24, mainnet
+      isolation confirmed
+      ([RPC resilience](evidence/2026-07-24-rpc-resilience-and-host-verification.md)).
+      (No automatic hot-path RPC failover exists by design; the backup RPC is
+      the reconciliation cross-check substrate — see the evidence note.)
+- [x] Testnet service is enabled at boot. — 2026-07-23, after funded
+      acceptance; all restart/RPC/low-balance/monitor drills above now pass.
 
 ## Mainnet launch
 
-- [ ] Known `mike.near` credential files are mode 0600, ownership is correct,
-      and no suspected exposure requires rotation.
-- [ ] Immediately before local service-key generation, a human confirms the
+- [x] Known `mike.near` credential files are mode 0600, ownership is correct,
+      and no suspected exposure requires rotation. — 2026-07-24:
+      `~/.near-credentials/mainnet/mike.near.json` and
+      `x402-relayer2.mike.near.json` both mode `0600`; the lost original
+      relayer keys were never exposed
+      ([mainnet go-live](evidence/2026-07-23-mainnet-golive.md);
+      [host verification](evidence/2026-07-24-rpc-resilience-and-host-verification.md)).
+- [x] Immediately before local service-key generation, a human confirms the
       mainnet target account, ED25519 algorithm, create-new mode-0600 path, and
-      no-private-output behavior.
-- [ ] Immediately before each mainnet account creation, access-key addition or
+      no-private-output behavior. — 2026-07-23, generated locally with no
+      private print, mode-0600, ED25519
+      ([mainnet go-live](evidence/2026-07-23-mainnet-golive.md)).
+- [x] Immediately before each mainnet account creation, access-key addition or
       removal, and funding transaction, a human confirms a fresh CLI preview
       containing network, operation, signer, target account, public key and
       permission when applicable, and exact funding amount. Every funded
       preview also names the asset, payer, recipient, relayer or `none`, and
       maximum sponsored NEAR; no confirmation is reused after a command or
-      field changes.
+      field changes. — 2026-07-23, each broadcast previewed and confirmed
+      ([mainnet go-live](evidence/2026-07-23-mainnet-golive.md);
+      [real traffic](evidence/2026-07-23-real-traffic-and-recovery.md)).
 - [x] The mainnet relayer exists with dedicated service and separate recovery
       keys. The original `x402-relayer.mike.near` (2026-07-19) became
       unrecoverable — its keys were lost and 5 NEAR is locked — so a fresh

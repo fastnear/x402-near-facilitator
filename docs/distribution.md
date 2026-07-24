@@ -1,11 +1,14 @@
-# Distribution: registry submissions (prepared, not sent)
+# Distribution: registry submissions
 
-Status: the three PR-based submissions are **open** (foundation #2941,
-awesome-agentic-commerce #510, x402facilitators #15) and the x402scan
-feature request is filed (#1040). Remaining operator actions: the NEAR
-Catalog form and watching the open PRs for maintainer feedback. The NEAR
-integrations coordination hub entry (launch-checklist gate 3) is parked
-separately.
+Status (2026-07-24): the x402 Foundation facilitators-table entry
+**merged** (#2941); **open** PRs awaiting maintainers are
+awesome-agentic-commerce #510 and x402facilitators #15; the x402scan
+feature request is filed (#1040); and the NEAR Intents `intents`-method
+spec amendment is open as #2948 (see
+[near-intents-adoption-gates.md](near-intents-adoption-gates.md)).
+Remaining operator actions: the NEAR Catalog form and watching the open
+PRs for maintainer feedback. The NEAR integrations coordination hub entry
+(launch-checklist gate 3) is parked separately.
 
 ## Readiness facts registries key off
 
@@ -52,22 +55,22 @@ separately.
 - Upstream: `x402-foundation/x402`, file `docs/dev-tools/facilitators.md`.
 - Staged branch (based on clean upstream `main`):
   <https://github.com/mikedotexe/x402/tree/x402-near-facilitator-listing>
-- **PR opened 2026-07-23:** <https://github.com/x402-foundation/x402/pull/2941>
+- **PR merged 2026-07-24:** <https://github.com/x402-foundation/x402/pull/2941>.
+  The maintainer accepted the `facilitators.md` entry and asked to drop the
+  deprecated `typescript/site/` ecosystem-page files (removed in `b783c830`);
+  the merged PR is the single table entry below.
 - Entry added (alphabetical position):
   `| [NEAR x402 Facilitator](https://x402.mikedotexe.com/supported) |
   Independent facilitator for NEAR mainnet and testnet; NEP-141 USDC
   settled through NEP-366 signed delegates with relayer-sponsored gas |`
 
-### 3. x402.org ecosystem page — partner entry (same branch)
+### 3. x402.org ecosystem page — partner entry (DEPRECATED upstream)
 
-- The x402.org site source lives in the same foundation repo
-  (`typescript/site`); the **same staged branch** adds
-  `app/ecosystem/partners-data/near-x402-facilitator/metadata.json`
-  (category `Facilitators`, baseUrl `https://x402.mikedotexe.com`,
-  networks near/near-testnet, scheme `exact`, assets NEP-141,
-  supports verify/settle/supported, no `list` endpoint) plus an original
-  minimal SVG logo at `public/logos/near-x402-facilitator.svg`.
-- One PR to the foundation repo covers both this and the table above.
+- **Withdrawn 2026-07-24.** The maintainer (phdargen) confirmed on #2941
+  that the x402.org ecosystem page (`typescript/site`) is deprecated and
+  asked for those files to be removed; the `metadata.json` partner entry
+  and logo were dropped from the branch (`b783c830`). No ecosystem-page
+  submission path exists at present.
 
 ### 4. awesome-agentic-commerce (formerly awesome-x402) — list entry (PR)
 
