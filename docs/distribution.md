@@ -31,7 +31,33 @@ separately.
   402 behavior remains authoritative and was validated by the live paid
   flows.
 - Optionally also register the testnet resource URL if the form accepts
-  non-mainnet resources.
+  non-mainnet resources (their spec notes testnets are not indexed).
+- **Status 2026-07-23: blocked upstream.** The probe now parses our
+  discovery document (title, paid operation, input schema all accepted)
+  but rejects registration with `No supported networks. Got:
+  [near:mainnet]. Supported: [base, solana]`. Their
+  `apps/scan/src/types/chain.ts` `Chain` enum and payment tooling are
+  EVM/Solana-only, so NEAR indexing is an upstream feature, not a config
+  change. Both warnings from the probe (root `favicon.ico`,
+  `info.contact.email`) are fixed on our side so registration is
+  turnkey once they add NEAR.
+- **Drafted feature request** (submit at
+  <https://github.com/Merit-Systems/x402scan/issues/new>):
+
+  > **Title:** Support NEAR (`near:mainnet`) resources
+  >
+  > x402scan currently indexes `base` and `solana` only
+  > (`SUPPORTED_CHAINS` in `apps/scan/src/types/chain.ts`); registration
+  > of a NEAR resource fails with `No supported networks. Got:
+  > [near:mainnet]`. There is now a production NEAR x402 facilitator
+  > (<https://x402.mikedotexe.com/supported>, x402 v2 `exact`,
+  > `payment-identifier` extension) and a live paid resource
+  > (<https://x402-demo.mikedotexe.com/work>) that passes your discovery
+  > probe end to end — OpenAPI-first document with `x-payment-info`,
+  > input schema, runtime 402 with v2 `PAYMENT-REQUIRED` header —
+  > failing only on the network allowlist. Payments settle NEP-141
+  > USDC (`17208628…33a1`) via NEP-366 signed delegates. Happy to help
+  > test NEAR support or provide a reference integration.
 
 ### 2. x402 Foundation repo — facilitators table (PR)
 
